@@ -1,5 +1,13 @@
+<script lang="ts">
+  import { api } from '$lib/api'
+  import { goto } from '$app/navigation'
+
+  async function createRoom() {
+    const response = await api.createRoom()
+    const { roomId } = response
+    goto(`/room/${roomId}`)
+  }
+</script>
+
 <h1>Welcome to NickKit</h1>
-<p>
-  Visit <a href="https://svelte.dev/docs/kit">svelte.dev/docs/kit</a> to read the
-  documentation
-</p>
+<button onclick={createRoom}>Create Room</button>
