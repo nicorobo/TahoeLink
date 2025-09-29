@@ -10,6 +10,9 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "hono": "^4.9.8"
+    "@hono/zod-validator": "^0.7.3",
+    "hono": "^4.9.8",
+    "ioredis": "^5.8.0",
+    "zod": "^4.1.11"
   }
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { PageProps } from './$types'
   import { api } from '$lib/api'
   import { goto } from '$app/navigation'
 
@@ -9,5 +10,7 @@
   }
 </script>
 
-<h1>Welcome to NickKit</h1>
-<button onclick={createRoom}>Create Room</button>
+<h1>Welcome to TahoeLink</h1>
+<button
+  class="bg-blue-500 text-white p-2 rounded-md hover:bg-blue-600 cursor-pointer"
+  onclick={createRoom}>Create Room</button>
