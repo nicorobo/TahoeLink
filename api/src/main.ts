@@ -6,6 +6,9 @@ import { sessionId } from './middleware/sessionId'
 import { redis } from './redis'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
+import { getShape } from './getShape'
+import { getNewBoard } from './getNewBoard'
+import { BOARD_HEIGHT, BOARD_WIDTH } from './constants'
 
 type Variables = {
     sessionId: string
@@ -47,12 +50,12 @@ app.post('/create-room', async (c) => {
 })
 
 const getDefaultGameState = () => {
-    return Array.from({ length: 100 }, () => 0)
+    return Array(BOARD_WIDTH).fill(Array(BOARD_HEIGHT).fill(-1))
 }
 const getGameStateKey = (roomId: string) => {
     return `room:${roomId}:state`
 }
-const getGameState = async (roomId: string): Promise<number[]> => {
+const getGameState = async (roomId: string): Promise<number[][]> => {
     const key = getGameStateKey(roomId)
     const state = await redis.get(key)
     if (!state) {
@@ -61,25 +64,28 @@ const getGameState = async (roomId: string): Promise<number[]> => {
     return JSON.parse(state)
 }
 
-const setGameState = async (roomId: string, state: number[]) => {
+const setGameState = async (roomId: string, state: number[][]) => {
     const key = getGameStateKey(roomId)
     await redis.set(key, JSON.stringify(state))
 }
-
-app.post('/room/:roomId/turn', zValidator('json', z.object({ move: z.number() })), async (c) => {
+const ShapeSchema = z.enum(["L", "O", "S", "T", "I"]);
+app.post('/room/:roomId/turn', zValidator('json', z.object({ column: z.number(), shape: ShapeSchema, rotation: z.number(), flip: z.boolean() })), async (c) => {
     const { roomId } = c.req.param()
-    const { move } = c.req.valid('json')
-    const state = await getGameState(roomId)
-    state[move] = state[move] ? state[move] + 1 : 1
-    await setGameState(roomId, state)
-    broadcastToRoom(roomId, c.get('sessionId'), { gameState: state }, 'turn')
-    return c.json({ gameState: state })
+    const { column, shape, rotation, flip } = c.req.valid('json')
+    const theShape = getShape({ shape, rotation, flip })
+    const currentBoard = await getGameState(roomId)
+    // Make move
+    const board = getNewBoard({ currentBoard, column, shape: theShape, turnId: 1.01 })
+    // Throws if invalid
+    await setGameState(roomId, board)
+    broadcastToRoom(roomId, c.get('sessionId'), { board }, 'turn')
+    return c.json({ board: board })
 })
 
 app.get('/room/:roomId', async (c) => {
     const { roomId } = c.req.param()
     const state = await getGameState(roomId)
-    return c.json({ gameState: state })
+    return c.json({ board: state })
 })
 
 // Store SSE streams by roomId

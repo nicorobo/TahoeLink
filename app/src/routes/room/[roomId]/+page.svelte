@@ -3,16 +3,26 @@
   import { page } from '$app/state'
   import { onMount, onDestroy } from 'svelte'
   import Board from '$lib/components/Board.svelte'
+  import { pieceState } from '$lib/state.svelte'
   import type { PageProps } from './$types'
+  import PieceControl from '$lib/components/PieceControl.svelte'
+  import PieceDisplay from '$lib/components/PieceDisplay.svelte'
 
   let roomId = $derived(page.params.roomId)
   let { data }: PageProps = $props()
-  let gameState = $state(data.gameState)
+  let board = $state(data.board)
   let eventSource: EventSource | null = null
 
-  const makeMove = async (move: number) => {
-    const response = await api.makeMove(roomId ?? '', move)
-    gameState = response.gameState
+  const makeMove = async (cell: number) => {
+    const column = cell % 10
+    const response = await api.makeMove({
+      roomId: roomId ?? '',
+      column,
+      shape: pieceState.shape,
+      rotation: pieceState.rotation,
+      flip: pieceState.flip,
+    })
+    board = response.board
   }
 
   onMount(() => {
@@ -33,7 +43,7 @@
 
         eventSource.addEventListener('turn', (event) => {
           const data = JSON.parse(event.data)
-          gameState = data.gameState
+          board = data.board
         })
 
         eventSource.addEventListener('error', (event) => {
@@ -65,4 +75,6 @@
 <h1>Room: {roomId}</h1>
 <p>Welcome to room {roomId}</p>
 
-<Board {gameState} onClick={makeMove} />
+<PieceControl />
+<PieceDisplay />
+<Board {board} onClick={makeMove} />

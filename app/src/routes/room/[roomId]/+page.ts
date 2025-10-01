@@ -1,8 +1,8 @@
 import type { PageLoad } from "./$types"
 import { browser } from '$app/environment'
 
-const getDefaultGameState = () => {
-    return Array.from({ length: 100 }, () => 0)
+const getDefaultBoard = () => {
+    return Array(10).fill(Array(10).fill(-1))
 }
 
 export const load: PageLoad = async ({ fetch, params }) => {
@@ -17,19 +17,19 @@ export const load: PageLoad = async ({ fetch, params }) => {
 
         if (!response.ok) {
             console.error('Response not ok:', response.status, response.statusText)
-            return { gameState: getDefaultGameState() }
+            return { board: getDefaultBoard() }
         }
 
         const data = await response.json()
         console.log('Fetched game state:', data)
 
         // Handle both { rooms: [...] } and direct array responses
-        const gameState = data.gameState
-        console.log('Game state:', gameState, browser)
-        return { gameState }
+        const board = data.board
+        console.log('Game state:', board, browser)
+        return { board }
 
     } catch (error) {
         console.error('Error fetching game state:', error)
-        return { gameState: getDefaultGameState() }
+        return { board: getDefaultBoard() }
     }
 }
