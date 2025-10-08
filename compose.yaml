@@ -13,41 +13,45 @@ services:
       - api
   app:
     build:
-      context: ./app
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./packages/app/Dockerfile
     environment:
       NODE_ENV: development
     expose:
       - 5173
     develop:
       watch:
-        - path: ./app/package.json
+        - path: ./packages/app/package.json
           action: rebuild
-        - path: ./app/bun.lock
+        - path: ./packages/app/Dockerfile
           action: rebuild
-        - path: app/
-          target: app/
+        - path: ./packages/app
+          target: ./app/packages/app
+          action: sync
+        - path: ./packages/shared
+          target: ./app/packages/shared
           action: sync
     depends_on:
       - api
   api:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./packages/api/Dockerfile
     environment:
       NODE_ENV: development
     expose:
       - 3000
     develop:
       watch:
-        - path: ./api/package.json
+        - path: ./packages/api/package.json
           action: rebuild
-        - path: ./api/bun.lock
+        - path: ./packages/api/Dockerfile
           action: rebuild
-        - path: ./api/Dockerfile
-          action: rebuild
-        - path: api/
-          target: api/
+        - path: ./packages/api
+          target: ./app/packages/api
+          action: sync
+        - path: ./packages/shared
+          target: ./app/packages/shared
           action: sync
     depends_on:
       - redis

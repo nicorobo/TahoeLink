@@ -1,0 +1,6 @@
+export * from './events'
+export * from './constants'
+export * from './types'
+export * from './game-mechanics/board'
+export * from './game-mechanics/shapes'
+export * from './game-mechanics/getShape'

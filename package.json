@@ -1,0 +1,7 @@
+{
+    "name": "tahoe-link",
+    "private": true,
+    "workspaces": [
+        "packages/*"
+    ]
+}

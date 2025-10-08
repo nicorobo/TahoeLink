@@ -1,1 +1,0 @@
-export type Shape = 'L' | 'O' | 'T' | 'I' | 'S'

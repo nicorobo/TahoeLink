@@ -1,0 +1,19 @@
+{
+  "name": "api",
+  "module": "src/main.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@tahoelink/shared": "workspace:*",
+    "@hono/zod-validator": "^0.7.3",
+    "hono": "^4.9.8",
+    "ioredis": "^5.8.0",
+    "zod": "^4.1.11"
+  }
+}

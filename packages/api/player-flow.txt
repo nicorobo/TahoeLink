@@ -1,0 +1,52 @@
+When a user clicks `/create-room`, we create a room in the state `not-begun`
+The UI will then navigate the user to the room
+Upon entering the room, every player is added to the spectators set (using their session_id), and the length is broadcast to every user. 
+If the room is in `not-begun` mode, all users will see a `join as ___` button
+On clicking this button, the player is added to the players list, and that is broadcast to every user
+When in `not-begun` mode and we get >=2 players, the start game button appears. 
+While stil in `not-begun` mode, up to 4 players can join.
+If a player leaves before the game has begun, their slot opens back up. 
+Once "Start game" is clicked (only visible by players), the game enters `in-progress` mode
+    It will select the first player in the list and begin rotating around for turns. 
+If a user leaves while the game is in progress, the game enters `waiting-for-players` mode
+    The buttons to join reappear and are available until the slot is filled, at which point the game resumes
+When the game is complete, the winner is announced
+
+Perhaps we can eventually have a way to continue without the missing player. 
+
+
+There are 4 possible player slots. We can't just randomly add players to a list, because we need their colors to be unique.
+
+We could create a hashset:
+player:room-id:0 = <session-id>
+player:room-id:1
+player:room-id:2
+player:room-id:3
+
+players:room-id = player:room-id:1, player:room-id:3
+
+I'm now thinking I'll skip the "name" part entirely. At least for beginning. 
+
+
+messages that can be broadcast:
+
+{
+    event: 'spectators-updated',
+    count: number
+}
+{
+    event: 'player-joined',
+    player: number,
+    available_player_slots: [],
+}
+{
+    event: 'player-left',
+    player: number,
+    available_player_slots: []
+}
+{
+    event: 'turn',
+    player: number,
+    board: number[][]
+    roll: DiceValue
+}

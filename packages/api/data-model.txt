@@ -1,0 +1,26 @@
+Is it better to have a key thats just board state, or instead something that encapsulates all game state. 
+Things we need to store:
+- board
+- whose turn it is
+- current turn/stage
+- list of spectators - just general people in the room, list of session ids so we can send updates. No limit to growth
+- list of players - {sessionId, color, piecesCount}. Limited to 4. 
+- current dice roll
+- score (unless this can be determined quickly by the board, which would be nice)
+- game state: in-progress, need-players, complete
+
+
+room:<room-id> - hash
+    board (json, number[][])
+    active-player: number
+    turn: number
+    dice: string
+    game-state: string
+
+players:<room-id> - list
+    name
+    sessionId
+    color
+
+spectators:<room-id> - set
+    sessionId
