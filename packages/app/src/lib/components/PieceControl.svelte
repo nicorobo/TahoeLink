@@ -4,9 +4,10 @@
   const shapes = ['L', 'O', 'S', 'T', 'I'] as Shape[]
 </script>
 
-<div>
+<div class="flex gap-1">
   {#each shapes as shape}
-    <button onclick={() => (pieceState.shape = shape)}>{shape}</button>
+    <button class="btn" onclick={() => (pieceState.shape = shape)}
+      >{shape}</button>
   {/each}
 </div>
 <div>

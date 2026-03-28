@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { streamSSE } from 'hono/streaming'
 import { sseHeaders } from './middleware/sse'
@@ -6,7 +7,7 @@ import { sessionId } from './middleware/sessionId'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { getRoom, setRoom } from './models/room'
-import { setPlayer, addPlayerToGame, verifyPlayer, getPositionBySessionId, getPlayerIds } from './models/players'
+import { setPlayer, addPlayerToGame, verifyPlayer, getPositionBySessionId, getPlayerIds, getPlayerIdBySessionId, unsetPlayer, removePlayerFromGame } from './models/players'
 import { broadcastToRoom } from './broadcasting/broadcastToRoom'
 import { handleRoomSSE } from './broadcasting/roomSSE'
 import { getUpdatedBoard, getShape } from '@tahoelink/shared'
@@ -18,6 +19,7 @@ type Variables = {
 const app = new Hono<{ Variables: Variables }>()
 const PORT = process.env.PORT || 3000
 
+app.use(cors())
 app.use(sessionId)
 app.use(logger())
 
@@ -49,13 +51,30 @@ app.post('/room/:roomId/join', zValidator('json', z.object({ playerId: z.number(
 
     await setPlayer({ roomId, sessionId, playerId });
     const { turn } = await getRoom(roomId)
-    if (turn > 0) {
+    if (turn <= 0) {
         await addPlayerToGame({ roomId, playerId })
     }
     const playerIds = await getPlayerIds(roomId)
     broadcastToRoom(roomId, sessionId, { playerIds }, 'player-joined')
+    return c.json({ playerId, playerIds })
+})
+
+
+app.post('/room/:roomId/leave', async (c) => {
+    const { roomId } = c.req.param()
+    const sessionId = c.get('sessionId')
+    const playerId = await getPlayerIdBySessionId({ roomId, sessionId })
+    if (playerId === null) {
+        throw new Error('User is not a player.')
+    }
+    await unsetPlayer({ roomId, playerId });
+    const { turn } = await getRoom(roomId)
+    if (turn <= 0) {
+        const removed = await removePlayerFromGame({ roomId, playerId })
+    }
+    const playerIds = await getPlayerIds(roomId)
+    broadcastToRoom(roomId, sessionId, { playerIds }, 'player-left')
     return c.json({ playerIds })
-    // Broadcast new player joined
 })
 
 app.post('/room/:roomId/start', async (c) => {
@@ -79,15 +98,17 @@ app.post('/room/:roomId/turn', zValidator('json', z.object({ column: z.number(),
     const { column, shape, rotation, flip } = c.req.valid('json')
     const room = await getRoom(roomId)
     const sessionId = c.get('sessionId')
-
+    if (room.stage !== 'in-progress') {
+        throw new Error('Game is currently not in-progress')
+    }
     // check that its the right player
-    const position = await verifyPlayer({ roomId, sessionId })
+    const playerId = await verifyPlayer({ roomId, sessionId })
     // check that their shape matches the dice
     // update board
     // roll dice
     // update player
     const turn = room.turn + 1
-    const shapeId = position + (turn * 0.001)
+    const shapeId = playerId + (turn * 0.001)
     // TODO: Throw if invalid
     const board = getUpdatedBoard({ board: room.board, column, shape: getShape({ shape, rotation, flip }), shapeId })
     const updatedRoomState = { ...room, board, turn: room.turn + 1 }
@@ -102,7 +123,7 @@ app.get('/room/:roomId', async (c) => {
     const room = await getRoom(roomId)
     const playerIds = await getPlayerIds(roomId)
     const playerPosition = await getPositionBySessionId({ roomId, sessionId })
-    const playerId = playerPosition > 0 ? playerIds[playerPosition] : null
+    const playerId = playerPosition >= 0 ? playerIds[playerPosition] : null
     return c.json({
         room,
         playerIds,

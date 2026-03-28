@@ -1,5 +1,10 @@
-import { BOARD_HEIGHT } from "../constants"
+import { BOARD_HEIGHT, BOARD_WIDTH } from "../constants"
 import { Board } from "../types"
+
+export const getDefaultBoard = () =>
+    Array.from({ length: BOARD_WIDTH }, () =>
+        Array.from({ length: BOARD_HEIGHT }, () => -1)
+    )
 
 const gtZero = (val: number) => val > 0
 export const getUpdatedBoard = ({ board, column, shape, shapeId = 1.00 }: { board: Board, column: number, shape: number[][], shapeId: number }) => {

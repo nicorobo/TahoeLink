@@ -2,7 +2,6 @@ import { type Context } from 'hono'
 import { type SSEStreamingApi } from 'hono/streaming'
 import { broadcastToRoom } from './broadcastToRoom'
 import { sendEvent } from './events'
-import { EVENT_NAMES } from '@tahoelink/shared'
 
 type Client = {
     stream: SSEStreamingApi
@@ -48,11 +47,11 @@ function getOrCreateRoomStreams(roomId: string): Set<Client> {
 }
 
 async function sendInitialConnection(stream: SSEStreamingApi) {
-    await sendEvent(stream, EVENT_NAMES.connected)
+    await sendEvent(stream, 'connected')
 }
 
 function broadcastConnection(roomId: string, sessionId: string) {
-    broadcastToRoom(roomId, sessionId, { message: `${sessionId} connected to room` }, EVENT_NAMES.participantChange)
+    broadcastToRoom(roomId, sessionId, { message: `${sessionId} connected to room` }, 'participant-change')
 }
 
 async function keepConnectionAlive(

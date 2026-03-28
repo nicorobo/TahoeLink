@@ -1,10 +1,15 @@
+import { Board, DiceValue, RoomStage } from "./types"
+
 export type ConnectedPayload = {
     roomId: string
 }
 
 export type TurnStartPayload = {
-    playerId: number
-    turnNumber: number
+    board: Board
+    activePlayer: number
+    turn: number
+    roll: DiceValue
+    stage: RoomStage
 }
 
 export type PlayerJoinedPayload = {

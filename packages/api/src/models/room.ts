@@ -1,7 +1,7 @@
 
 import { redis } from '../redis'
 import type { Room, DiceValue } from '@tahoelink/shared'
-import { BOARD_HEIGHT, BOARD_WIDTH } from '@tahoelink/shared'
+import { getDefaultBoard } from '@tahoelink/shared'
 
 interface SerializedRoom extends Omit<Room, 'board' | 'activePlayer'> {
     board: string
@@ -9,11 +9,6 @@ interface SerializedRoom extends Omit<Room, 'board' | 'activePlayer'> {
 }
 
 const roomKey = (roomId: string) => `room:${roomId}`
-
-const getDefaultBoard = () =>
-    Array.from({ length: BOARD_WIDTH }, () =>
-        Array.from({ length: BOARD_HEIGHT }, () => -1)
-    )
 
 // Should we add createdAt? or gameStartedAt?
 const getDefaultRoom = (): Room => ({

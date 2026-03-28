@@ -1,3 +1,4 @@
+import { playerState, roomState } from "$lib/state.svelte"
 import type { EventPayloadMap, EventName } from "@tahoelink/shared"
 
 type Handler<E extends EventName> = (payload: EventPayloadMap[E]) => void
@@ -7,13 +8,16 @@ export const eventHandlers: { [K in EventName]: Handler<K> } = {
         console.log('Connected to room', data.roomId)
     },
     'turn-start': (data) => {
-        console.log('Turn made by', data.playerId, 'Turn #', data.turnNumber)
+        roomState.roll = data.roll
+        roomState.turn = data.turn
+        roomState.board = data.board
+        roomState.stage = data.stage
     },
     'player-joined': (data) => {
-        console.log('Player joined')
+        playerState.playerIds = data.playerIds
     },
     'player-left': (data) => {
-        console.log('Player left')
+        playerState.playerIds = data.playerIds
     },
     'participant-change': (data) => {
         console.log('Participants changed:', data.participants)

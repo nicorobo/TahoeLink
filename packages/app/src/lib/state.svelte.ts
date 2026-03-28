@@ -1,4 +1,4 @@
-import type { Shape } from '@tahoelink/shared'
+import { getDefaultBoard, type Room, type Shape } from '@tahoelink/shared'
 interface PieceState {
     shape: Shape,
     rotation: number,
@@ -11,8 +11,19 @@ export const pieceState = $state<PieceState>({
 })
 
 interface PlayerState {
-    name: string
-    color: number
+    playerId: number | null
+    playerIds: number[]
 }
 
-export const playerState = $state<PlayerState | null>(null)
+export const roomState = $state<Room>({
+    board: getDefaultBoard(),
+    activePlayer: 0,
+    turn: 0,
+    roll: 'L',
+    stage: 'waiting-for-players'
+})
+
+export const playerState = $state<PlayerState>({
+    playerId: null,
+    playerIds: [],
+})

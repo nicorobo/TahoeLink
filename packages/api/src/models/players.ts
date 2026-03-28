@@ -17,6 +17,7 @@ export const setPlayer = async ({ roomId, sessionId, playerId }: SetPlayerArgs) 
     // If false, throw error
     if (!player) {
         await redis.set(key, sessionId)
+        console.log(`Player set ${key} set to ${sessionId}`)
     } else {
         throw new Error("Player cannot be overwritten")
     }
@@ -31,10 +32,11 @@ export const addPlayerToGame = async ({ roomId, playerId }: AddPlayerToGameArgs)
     // Check if player at index already exists in players list
     // If not, add to players list
     const listKey = playersKey(roomId)
-    const inPlay = await redis.lpos(listKey, playerId)
-    if (inPlay === null) {
-        await redis.rpush(listKey, playerId)
+    const currentPosition = await redis.lpos(listKey, playerId)
+    if (currentPosition === null) {
+        return redis.rpush(listKey, playerId)
     }
+    return currentPosition
 }
 
 interface UnsetPlayerArgs {
@@ -47,11 +49,20 @@ interface RemovePlayerFromGameArgs {
     roomId: string
     playerId: number
 }
-export const removePlayerFromGame = async ({ roomId, playerId }: RemovePlayerFromGameArgs) => redis.lrem(playersKey(roomId), 0, playerKey(roomId, playerId))
+export const removePlayerFromGame = async ({ roomId, playerId }: RemovePlayerFromGameArgs) => redis.lrem(playersKey(roomId), 0, playerId)
 
 export const getPlayerIds = async (roomId: string): Promise<number[]> => {
     const playerIds = await redis.lrange(playersKey(roomId), 0, -1)
     return playerIds.map(Number)
+}
+
+const getPlayersByRoomId = async (roomId: string) => {
+    const playerIds = await getPlayerIds(roomId)
+    if (playerIds.length === 0) {
+        return []
+    }
+    const sessionIds = await redis.mget(playerIds.map(id => playerKey(roomId, id)))
+    return playerIds.map((id, i) => ({ id, sessionId: sessionIds[i] }))
 }
 
 interface GetIndexBySessionIdArgs {
@@ -59,9 +70,15 @@ interface GetIndexBySessionIdArgs {
     sessionId: string
 }
 export const getPositionBySessionId = async ({ roomId, sessionId }: GetIndexBySessionIdArgs) => {
-    const playerIds = await getPlayerIds(roomId)
-    const sessionIds = await redis.mget(playerIds.map(id => playerKey(roomId, id)))
-    return sessionIds.findIndex(id => id === sessionId)
+    const players = await getPlayersByRoomId(roomId)
+    return players.findIndex((player) => player.sessionId === sessionId)
+}
+
+export const getPlayerIdBySessionId = async ({ roomId, sessionId }: GetIndexBySessionIdArgs) => {
+    const players = await getPlayersByRoomId(roomId)
+    console.log(players)
+    const index = players.findIndex((player) => player.sessionId === sessionId)
+    return index < 0 ? null : players[index].id
 }
 
 interface VerifyPlayerArgs {
@@ -69,9 +86,9 @@ interface VerifyPlayerArgs {
     sessionId: string
 }
 export const verifyPlayer = async ({ roomId, sessionId }: VerifyPlayerArgs) => {
-    const index = await getPositionBySessionId({ roomId, sessionId })
-    if (index < 0) {
+    const playerId = await getPlayerIdBySessionId({ roomId, sessionId })
+    if (playerId === null) {
         throw new Error('User is not a player')
     }
-    return index;
+    return playerId;
 }
