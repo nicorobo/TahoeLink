@@ -10,6 +10,7 @@
         "dev:web": "cd packages/app && bun run dev",
         "check": "cd packages/app && bun run check",
         "test": "cd packages/shared && bun test",
+        "test:api": "cd packages/api && bun test",
         "typecheck:api": "cd packages/api && bunx tsc --noEmit -p tsconfig.json",
         "typecheck:shared": "cd packages/shared && bunx tsc --noEmit -p tsconfig.json"
     },

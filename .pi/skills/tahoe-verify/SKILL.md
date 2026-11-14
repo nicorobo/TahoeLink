@@ -12,7 +12,7 @@ do not fix code unless the user asks.
 ## 0. Probe the environment
 
 ```bash
-command -v bun docker mkcert curl jq wrangler
+command -v bun curl jq wrangler
 bun --version
 ```
 
@@ -30,19 +30,7 @@ bun install
 
 ## 2. Start the stack
 
-### Path A — Docker (legacy; works until M2 removes Redis + SSE)
-
-```bash
-make certs                 # required; nginx mounts localhost.crt/key
-docker compose up --build  # or: docker compose watch
-```
-
-- UI: `https://localhost`
-- Health: `curl -k https://localhost/api/health`
-- Ports: nginx 80/443, app 5173, API 3000, Redis 6379.
-- Stop: `docker compose down`; reset state: `docker compose down -v`.
-
-### Path B — Wrangler dev (target workflow, built by M0)
+### Wrangler dev (current workflow)
 
 ```bash
 # Terminal 1
@@ -53,16 +41,12 @@ cd packages/app && bun run dev
 ```
 
 - UI: `http://localhost:5173`
-- Health: `curl -s http://localhost:3000/health`
-- **No Redis, no Docker, no nginx.**
+- Health: `curl -s http://localhost:3000/health` (or 8787, the default wrangler port)
+- **No Docker, no Redis, no nginx.**
 
-Known gaps until M0:
+Known gaps (M0 complete):
 
-- `GET /api/*` on port 5173 → 404 (Vite proxy not wired yet).
-- `GET /room/:id` → 500 `fetch failed` (SSR base is `http://api:3000`).
-- Session cookie is always `Secure`; plain-HTTP persistence is unreliable.
-
-Use `http://localhost:3000/health` to verify the API alone.
+- Session cookie may be `Secure` in plain HTTP: set `COOKIE_SECURE=false` if needed.
 
 ## 3. Run the checks
 
@@ -72,78 +56,61 @@ cd packages/app && bun run build
 cd packages/shared && bunx tsc --noEmit -p tsconfig.json
 cd packages/api && bunx tsc --noEmit -p tsconfig.json
 cd packages/shared && bun test
+cd packages/api && bun test          # DO lifecycle tests (start wrangler dev first)
 ```
 
 Expected as of the last handoff:
 
 | Check | Expected |
 | --- | --- |
-| `packages/app` check | 4 errors in `shared` (type-only imports) until M0-5 |
-| `packages/api` typecheck | same 4 errors |
+| `packages/app` check | 0 errors, 1 a11y warning (Board.svelte buttons) |
+| `packages/api` typecheck | clean |
 | `packages/shared` typecheck | clean |
-| `packages/shared` tests | no tests yet |
+| `packages/shared` tests | 180+ pass (engine: placement, dice, scoring, supply, skip-turn) |
+| `packages/api` tests | 16 pass (DO lifecycle: create, join, start, turn, leave, WS) |
 | `packages/app` build | passes, with an `adapter-auto` warning (expected until M6-1) |
 
 If a failure differs from this baseline, it is likely new: report it with file:line.
 
 ## 4. API smoke test
 
-Use a cookie jar; the seat is tied to `session_id`. If `jq` is unavailable, print the raw
-JSON and read the `roomId` field manually.
+Use the smoke script (handles cookies automatically):
 
 ```bash
-BASE_URL=${BASE_URL:-http://localhost:3000}    # wrangler dev default
+bash scripts/smoke.sh
+```
+
+Or manually (cookie jar approach):
+
+```bash
+BASE_URL=${BASE_URL:-http://localhost:3000}
 JAR=/tmp/tahoelink.cookies
 ROOM=$(curl -s -c "$JAR" -X POST "$BASE_URL/create-room" | jq -r .roomId)
 echo "room=$ROOM"
-
 curl -s -b "$JAR" -c "$JAR" -X POST "$BASE_URL/room/$ROOM/join" \
-  -H 'content-type: application/json' -d '{"playerId":0}' | jq
-
+  -H 'content-type: application/json' -d '{}' | jq
 curl -s -b "$JAR" "$BASE_URL/room/$ROOM" | jq
 ```
-
-For the Docker/nginx path, set `BASE_URL=https://localhost/api` (and add `-k`).
 
 Expected: room ID returned; join returns `playerId` + `playerIds`; room GET returns the
 default room and player ID 0. A missing cookie jar means every request is a new session.
 
 ## 5. State inspection
 
-### Legacy — Redis (before M2)
+### DO storage
+
+The DO stores room state in SQLite-backed `ctx.storage`. Inspect by reading the room via
+the API:
 
 ```bash
-redis-cli --scan --pattern 'room:*'
-redis-cli hgetall room:$ROOM
-redis-cli lrange players:$ROOM 0 -1
-```
-
-Inside Docker: prefix with `docker compose exec redis`. Check `board` is valid JSON, 10×10;
-`stage` is valid; `activePlayer` is a seat ID (0–3).
-
-### Target — DO storage (after M2)
-
-The DO stores room state in SQLite. Inspect via a debug endpoint or:
-
-```bash
-# After M2: add a GET /admin/room/:id that dumps DO state
-curl -s "http://localhost:3000/admin/room/$ROOM"
+curl -s "http://localhost:3000/room/$ROOM" | jq
 ```
 
 Or use `wrangler tail` in production to observe state changes.
 
 ## 6. Realtime inspection
 
-### Legacy — SSE (before M2)
-
-```bash
-curl -Ns "http://localhost:3000/sse/room/$ROOM"
-```
-
-Expected: `event: connected`. A second client joining should produce `player-joined`.
-The sender is excluded from its own broadcast, so use two cookie jars.
-
-### Target — WebSocket (after M2)
+### WebSocket (current)
 
 Use `websocat` or a browser WebSocket console:
 
@@ -152,7 +119,7 @@ Use `websocat` or a browser WebSocket console:
 websocat "ws://localhost:3000/ws/room/$ROOM"
 ```
 
-Expected: a `state` event with the full room snapshot on connect, then incremental updates.
+Expected: a `connected` event, then a `state` event with the full room snapshot.
 
 ## 7. Two-browser check
 
@@ -162,22 +129,20 @@ two browsers (e.g. Chrome + Safari) or a normal + incognito window. Verify:
 1. Player A creates a room and joins seat 0.
 2. Player B opens the invite URL and joins seat 1; both see both players.
 3. A refreshes; A keeps its seat (cookie).
-4. A starts the game once the DO state machine exists (M3+).
-5. A move appears on B's board once the DO turn handler is implemented (M3-5).
+4. A starts the game (M3+).
+5. A move appears on B's board (M3-5).
 6. A reloads mid-game and recovers the same state (M3-7).
 
 ## 8. Troubleshooting
 
 | Symptom | Likely cause | Task |
 | --- | --- | --- |
-| `/api/*` 404 on 5173 | No Vite proxy; not behind nginx | M0-1 |
-| `/room/:id` 500 `fetch failed` | SSR base is `http://api:3000` | M0-1 |
-| Lobby state does not stick over HTTP | Always-`Secure` cookie | M0-2 |
-| `bunx wrangler dev` fails | Missing `wrangler.jsonc` or Workers entry | M0-4 |
-| Turn returns 500 `board[col].findIndex` | Placement past the right edge | M1-2 |
-| Turn returns 500 after a tall stack | Ceiling overflow is not validated | M1-2 |
-| WebSocket connects but never updates | Handler not wired in DO | M2-3 |
-| `bun run check` fails in `shared` | Type-only imports | M0-5 |
+| `/api/*` 404 on 5173 | Vite proxy not running | M0-1 |
+| `/room/:id` 500 | DO not initialized; create room first | — |
+| Turn returns 500 | Ceiling overflow or invalid placement | M1-2 |
+| WebSocket connects but no updates | Handler not wired in DO | M2-3 |
+| `bun run check` fails in `shared` | Type-only imports (fixed) | M0-5 |
+| `bun test` in API fails | Wrangler dev not running | M2-6 |
 
 Do not work around these with try/catch or client-side fixes; link the task instead.
 
@@ -185,7 +150,7 @@ Do not work around these with try/catch or client-side fixes; link the task inst
 
 ```text
 Verdict: PASS | PASS WITH KNOWN FAILURES | FAIL
-Environment: bun x.y.z; docker yes/no; mkcert yes/no; wrangler yes/no
+Environment: bun x.y.z; wrangler yes/no
 
 Commands:
 - <command> -> exit <code>; <one-line result>

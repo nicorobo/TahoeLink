@@ -5,16 +5,16 @@ Operating manual for coding agents. Read [README.md](./README.md) for setup,
 task queue. Use `.pi/skills/tahoe-verify/SKILL.md` before committing. Keep this file short:
 long reference belongs in `PLAN.md`, `docs/`, or a skill.
 
-Last verified: 2026-11-13, Bun 1.4.4, macOS. Docker, Redis, and mkcert were not installed.
+Last verified: 2026-11-16, Bun 1.4.4, macOS. Docker, Redis, and mkcert are not installed.
 
 ## 1. Project
 
 Multiplayer web implementation of **Tetris Link**: 2–4 players share a 10×10 board, roll a
 tetromino die, and drop matching pieces into columns. Scoring is based on links between
-same-color pieces; the exact rules still need confirmation.
+same-color pieces. All confirmed rules are codified in [docs/GAME_RULES.md](./docs/GAME_RULES.md).
 
 The server is authoritative. The client renders state and sends intents. `shared` is pure
-TypeScript, `api` is Bun + Hono + Redis, `app` is SvelteKit (Svelte 5) + Tailwind.
+TypeScript, `api` is Hono + Durable Objects, `app` is SvelteKit (Svelte 5) + Tailwind.
 
 ## 2. Definition of done
 
@@ -30,26 +30,18 @@ If something cannot be verified (no Docker, no rulebook), say so instead of clai
 
 ## 3. Commands
 
-Probe first: `command -v bun docker mkcert curl jq wrangler`
+Probe first: `command -v bun curl jq wrangler`
 
-Full stack (Docker/nginx — works today but being replaced):
-
-```bash
-bun install
-make certs                 # required; nginx mounts localhost.crt/key
-docker compose up --build  # or: docker compose watch
-# UI:  https://localhost
-# API: curl -k https://localhost/api/health
-```
-
-Wrangler dev (target workflow after M0):
+Wrangler dev (current workflow — M2+):
 
 ```bash
-cd packages/api && bunx wrangler dev          # Worker + DOs via miniflare
-cd packages/app && bun run dev                # SvelteKit dev server
+# Terminal 1: API (Worker + Durable Objects via miniflare)
+cd packages/api && bunx wrangler dev
+# Terminal 2: SvelteKit dev server
+cd packages/app && bun run dev
 # UI:  http://localhost:5173
-# API: http://localhost:3000 (via wrangler dev)
-# No Redis, no Docker, no nginx
+# API: http://localhost:3000 (via wrangler dev) or 8787 (default wrangler)
+# No Docker, no Redis, no nginx
 ```
 
 Checks:
@@ -60,23 +52,22 @@ cd packages/app && bun run build
 cd packages/shared && bunx tsc --noEmit -p tsconfig.json
 cd packages/api && bunx tsc --noEmit -p tsconfig.json
 cd packages/shared && bun test
+cd packages/api && bun test             # DO lifecycle tests (needs wrangler dev)
 ```
 
-Current baseline: app/api typechecks report 4 `verbatimModuleSyntax` errors in `shared`;
-`shared` alone is clean; no tests exist. macOS has no GNU `timeout`; use a background
-terminal or `perl -e 'alarm shift; exec @ARGV' 10 ...`.
+Current baseline: all typechecks pass; shared 182 tests pass; API lifecycle tests pass
+(start wrangler dev first). macOS has no GNU `timeout`; use a background terminal or
+`perl -e 'alarm shift; exec @ARGV' 10 ...`.
 
 Probes:
 
 ```bash
 curl -s localhost:3000/health
 curl -s -X POST localhost:3000/create-room
-redis-cli --scan --pattern 'room:*'
-redis-cli hgetall room:<roomId>
-redis-cli lrange players:<roomId> 0 -1
+curl -s localhost:3000/room/<roomId>   # GET room state
 ```
 
-Full verification, smoke tests, SSE/Redis inspection, and troubleshooting live in
+Full verification, smoke tests, and troubleshooting live in
 `.pi/skills/tahoe-verify/SKILL.md`.
 
 ## 4. Architecture map
@@ -91,23 +82,23 @@ Full verification, smoke tests, SSE/Redis inspection, and troubleshooting live i
 
 | API (`packages/api`) | Behavior today |
 | --- | --- |
-| `POST /create-room` | Random ID, default room; no collision check |
-| `POST /room/:id/join` | Claims seat key; adds to list only if `turn <= 0` |
-| `POST /room/:id/leave` | Deletes seat key; frees list slot only pre-game |
-| `POST /room/:id/start` | Sets `in-progress`; no min-player check |
-| `POST /room/:id/turn` | Applies board math; no turn/dice/legality checks |
-| `GET /room/:id` | Room + player list + seat index + player ID |
-| `GET /sse/room/:id` | SSE stream; in-process client registry |
+| `POST /create-room` | Random ID → DO init; no collision check |
+| `POST /room/:id/join` | DO assigns seat; idempotent rejoin |
+| `POST /room/:id/leave` | DO frees seat; broadcasts update |
+| `POST /room/:id/start` | DO sets `in-progress`; 2-player min check |
+| `POST /room/:id/turn` | DO increments turn (stub — no validation) |
+| `GET /room/:id` | DO returns state + seats + player position |
+| `GET /ws/room/:id` | WebSocket upgrade → DO Hibernation API |
 | `GET /health` | Status + timestamp |
 
-Redis keys: `room:<roomId>` (hash), `players:<roomId>` (list of seat IDs),
-`player:<roomId>:<seat>` (session ID). **Replaced by Durable Objects in M2:**
-Redis keys → DO SQLite storage; SSE → WebSocket (DO Hibernation API);
-fanout via `ctx.getWebSockets()` instead of `broadcastToRoom`.
+**Durable Objects** replace all Redis state: DO `RoomDurableObject` stores seats, board,
+stage, turn, roll, scores via SQLite-backed `ctx.storage`. WebSocket (Hibernation API)
+replaces SSE for real-time; fanout via `ctx.getWebSockets()`.
+
 App entry points: `src/lib/api.ts` (client), `state.svelte.ts` (module-level
-`$state`), `events/` (SSE reducers), `routes/room/[roomId]/` (lobby; game screen is a
-placeholder). `Board`, `PieceDisplay`, `PieceControl`, `PlayerStatus`, and `JoinButtons`
-exist but are **unused**.
+`$state`), `events/` (WebSocket event handlers), `routes/room/[roomId]/` (lobby; game
+screen is a placeholder). `Board`, `PieceDisplay`, `PieceControl`, `PlayerStatus`, and
+`JoinButtons` exist but are **unused**.
 
 ## 5. Invariants
 
@@ -137,15 +128,15 @@ exist but are **unused**.
 
 Full backlog, including P1/P2, is in `PLAN.md` § Defect backlog.
 
-| Defect | Where |
-| --- | --- |
-| No Vite `/api` proxy; SSR hardcodes `http://api:3000` | `packages/app/src/lib/api.ts:4`, `vite.config.ts` |
-| Placement throws past the right edge; ceiling overflow silently loses cells | `shared/src/game-mechanics/board.ts:11-31` |
-| No turn ownership, dice roll, shape validation, or active-player advance | `api/src/main.ts:96-118` |
-| No scoring, piece supply, end condition, or winner | absent |
-| No game UI; board/piece components unused | `app/src/routes/room/[roomId]/+page.svelte:84` |
-| Always-`Secure` cookie makes plain-HTTP native dev unreliable | `api/src/middleware/sessionId.ts:10-15` |
-| Room read-modify-write is not atomic | `api/src/models/room.ts:31-44` (resolved by DO single-writer in M2) |
+| Defect | Where | Status |
+| --- | --- | --- |
+| Placement throws past the right edge; ceiling overflow silently loses cells | `shared/src/game-mechanics/board.ts` | Fixed in M1-2 (tryPlacePiece) |
+| No turn ownership, dice roll, shape validation, or active-player advance | DO `handleTurn` | M3-5 target |
+| No scoring, piece supply, end condition, or winner on server | DO state (engine done in shared) | M3-5 target |
+| No game UI; board/piece components unused | `app/src/routes/room/[roomId]/+page.svelte` | M4 target |
+| Room mutation not atomic | `api/src/models/room.ts` (deleted) | **Resolved** — DO single-writer |
+| No Vite `/api` proxy; SSR hardcodes `http://api:3000` | M0-1 | **Resolved** |
+| Always-`Secure` cookie for plain HTTP | M0-2 | **Resolved** |
 
 ## 7. Workflow
 

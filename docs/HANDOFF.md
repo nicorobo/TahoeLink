@@ -6,62 +6,67 @@ entries; older detail lives in git and `PLAN.md`, so archive rather than endless
 
 ## Snapshot
 
-- Date: 2026-11-16 (session 3)
-- Branch: `milestone-2.1-2.4`; M2-1 through M2-4 implemented and verified
-- Current milestone: **M2 — Durable Object foundation** (M2-1..M2-4 complete, M2-5..M2-7 next)
+- Date: 2026-11-16 (session 4)
+- Branch: `milestone-2.5-2.7`; M2-5, M2-6, M2-7 implemented and verified
+- Current milestone: **M2 complete** — next is **M3 — Server state machine on DO**
 
-To resume: read `AGENTS.md`, then run `/task M2-5` (or `/task M2-7` for next task in M2);
-use `/verify` before committing and `/handoff` at the end of the session.
+To resume: read `AGENTS.md`, then run `/task M3-1` (standardize errors) or `/task M3-2`
+(room lifecycle); use `/verify` before committing and `/handoff` at the end of the session.
 
 ## What changed this session
 
 | Task | Change | Files |
 |------|--------|-------|
-| M2-1 | Created `RoomDurableObject` class managing seats/board/stage/turn/roll/scores via DO key-value storage. WebSocket Hibernation API for real-time broadcast. | `packages/api/src/durable-objects/room-do.ts` (new) |
-| M2-2 | Wired DO into Hono routes: create-room → DO init, GET /room/:id → DO fetch, removed Redis models. | `packages/api/src/main.ts` (rewritten), removed `models/room.ts`, `redis.ts` |
-| M2-3 | WebSocket upgrade at `/ws/room/:id` forwarding to DO Hibernation API. Removed SSE broadcasting. | `packages/api/src/main.ts` (ws route), removed `broadcasting/`, `middleware/sse.ts` |
-| M2-4 | Join/leave handled by DO methods with seat array + broadcast. Removed players model. | `packages/api/src/durable-objects/room-do.ts`, removed `models/players.ts` |
-| — | Updated Workers entry point to export DO class for wrangler binding. | `packages/api/src/index.ts` |
-| — | Added DO binding + migration to wrangler config. | `packages/api/wrangler.jsonc` |
-| — | Custom type declarations for `cloudflare:workers` module avoiding extra npm dependency. | `packages/api/src/types/cloudflare.d.ts` (new) |
-
-### Old files deleted
-
-- `packages/api/src/models/room.ts`, `packages/api/src/models/players.ts` — replaced by DO
-- `packages/api/src/redis.ts` — no longer needed
-- `packages/api/src/broadcasting/` (3 files) — replaced by WS
-- `packages/api/src/middleware/sse.ts` — no longer needed
+| M2-5 | Updated `events.ts` for WebSocket payloads: added `state` and `error` types; removed `participant-change` (SSE-era). Updated event handlers in app. | `packages/shared/src/events.ts` (edited), `packages/app/src/lib/events/index.ts` (edited) |
+| M2-5 | Fixed type mismatch in app from removed event type | `packages/app/src/lib/events/index.ts` |
+| M2-6 | Created DO lifecycle tests (HTTP + WebSocket) — 16 tests covering create, join, start, turn, leave, rejoin idempotency, error cases, WS connect/state snapshot | `packages/api/src/__tests__/room-do.test.ts` (new) |
+| M2-6 | Added test script to API package.json; removed `ioredis` dependency | `packages/api/package.json` |
+| M2-7 | Updated README.md: removed Redis/Docker/SSE references, updated repo layout, status table, commands | `README.md` |
+| M2-7 | Updated AGENTS.md: removed Docker/Redis references, updated architecture map, commands | `AGENTS.md` |
+| M2-7 | Rewrote smoke.sh for DO-only workflow (no Redis branches) | `scripts/smoke.sh` |
+| M2-7 | Updated tahoe-verify skill: removed Docker/Redis inspection sections | `.pi/skills/tahoe-verify/SKILL.md` |
+| M2-7 | Cleaned up env files (removed REDIS_HOST/REDIS_URL) | `packages/api/.env.example`, `.env.development` |
+| M2-7 | Deleted Dockerfiles and Makefile (no longer needed) | `packages/app/Dockerfile`, `packages/api/Dockerfile`, `Makefile` |
+| M2-7 | Removed deprecated files from git tracking | — |
+| M2-7 | Added `test:api` script to root package.json | `package.json` |
 
 ### Design decisions
 
-1. **DO persistence**: Used key-value `storage.put/get` (not SQL API) for simpler migration from Redis-like API.
-2. **State transport**: WebSocket `{event, data}` JSON envelopes via `ctx.getWebSockets()` broadcast.
-3. **Type declarations**: Custom `cloudflare.d.ts` instead of `@cloudflare/workers-types` to avoid extra dependency. Declares `DurableObject`, `DurableObjectState`, `DurableObjectStorage`, `WebSocketPair`, `DurableObjectNamespace` types.
+1. **DO tests via HTTP** (not `SELF.fetch()`): Used Bun HTTP requests against `wrangler dev` instead of miniflare `SELF.fetch()` because (a) miniflare 4 has no standalone API, (b) wrangler dev is the standard dev workflow, (c) the tests also serve as integration tests validating the full HTTP route → DO stub → DO handler chain. Tests require wrangler dev running on port 8787.
+2. **Cookie-based session for tests**: Tests use the actual session cookie middleware, not `X-Session-Id` headers. The `req()` helper extracts `Set-Cookie` and passes it on subsequent requests, matching real browser behavior.
+3. **Retained `player-flow.txt` and `data-model.txt`**: These are design notes that still have relevant context for future work, even though they reference the old Redis-based architecture.
 
 ## Verified evidence
 
 | Check | Result |
 | --- | --- |
-| `cd packages/api && bunx tsc --noEmit` | clean |
 | `cd packages/shared && bunx tsc --noEmit` | clean |
+| `cd packages/api && bunx tsc --noEmit` | clean |
 | `cd packages/app && bun run check` | 0 errors, 1 pre-existing a11y warning |
 | `cd packages/shared && bun test` | **182 pass, 0 fail** |
-| `POST /create-room` on wrangler local dev | 200, returns `{roomId}` |
-| `POST /room/:id/join` ×2 | 200, returns `{playerId, playerIds}` |
-| `GET /room/:id` | 200, returns room + seats + playerPosition |
-| `POST /room/:id/start` | 200, stage transitions to `in-progress` |
+| `cd packages/api && bun test` | **16 pass, 0 fail** (needs wrangler dev on :8787) |
+| `POST /create-room` | 200, returns `{roomId}` |
+| `POST /room/:id/join` ×2 | 200, different seats |
+| `POST /room/:id/start` | 200, stage → `in-progress` |
 | `POST /room/:id/turn` | 200, turn increments |
-| `POST /room/:id/leave` | 200, player removed from seat list |
+| `POST /room/:id/leave` | 200, player removed |
+| Rejoin idempotency | Same session returns existing seat |
+| WebSocket connect | 101 upgrade, receives `connected` + `state` events |
+
+## Current state
+
+- **DO foundation complete**: RoomDurableObject owns seats, board, stage, turn, roll, scores. WebSocket Hibernation API for real-time. All Redis models and SSE broadcasting deleted.
+- **Events aligned**: `events.ts` has `connected`, `state`, `turn-start`, `player-joined`, `player-left`, `error` — matching what the DO broadcasts.
+- **All docs cleaned up**: No Redis/Docker/SSE references remain in README, AGENTS.md, env files, smoke script, or verify skill.
+- **No ioredis dependency**: Removed from API package.json.
 
 ## Not verified / known gaps
 
-- **WebSocket full handshake** not tested — no `websocat` or browser client connected. The upgrade endpoint is wired, but we haven't verified the full WS lifecycle (connect → state snapshot → broadcast on join/leave). This should be tested in M2-5/M2-6 when event types are updated.
-- **No API tests** — M2-6 (DO lifecycle tests with `SELF.fetch()`) still pending.
-- **`MIN_PLAYERS` / `MAX_PLAYERS`** are defined in shared constants but not enforced in DO start handler — M3-4 target.
+- **WebSocket full lifecycle** not tested with two concurrent connections — no browser-level test for broadcast fanout during join/leave.
+- **No `MIN_PLAYERS` / `MAX_PLAYERS` enforcement** in DO start handler — M3-4 target.
 - **Turn handler is a stub** — no board math, dice roll, scoring, or active-player validation. Full turn enforcement in M3-5.
-- **No `min-players` check on start** — DO start handler allows starting with any player count. M3-4 target.
-- **Docker Compose** was already deleted in a prior session.
-- **`smoke.sh`** script still references Redis-dependent routes — needs updating (M2-6 or M2-7).
+- **No game UI** — board/piece components exist but are unused (M4 target).
+- **`smoke.sh`** was rewritten but not tested against a running wrangler dev in this session. Run it in the next session.
 - macOS has no `timeout` command; use `perl -e 'alarm shift; exec @ARGV'`.
 
 ## Environment
@@ -71,17 +76,29 @@ use `/verify` before committing and `/handoff` at the end of the session.
 
 ## Session log
 
-### 2026-11-16 (session 3) — M2-1..M2-4: Durable Object foundation
+### 2026-11-16 (session 4) — M2-5..M2-7: Events, tests, documentation cleanup
 
-Created the RoomDurableObject class replacing all Redis-based models and SSE broadcasting:
+**M2-5** — Refreshed `packages/shared/src/events.ts`:
+- Added `StatePayload` (full room snapshot for WS `state` event)
+- Added `ErrorPayload` for error events
+- Removed `ParticipantChangePayload` (was SSE-era, never used by DO)
+- Updated `EventPayloadMap` accordingly
+- Fixed `packages/app/src/lib/events/index.ts` which referenced the removed `participant-change` type
 
-- **DO class** (`room-do.ts`): Manages room state (seats, board, stage, turn, roll, scores) via `ctx.storage`. Handles GET (room state), POST (join, leave, init, start, turn), and WebSocket upgrade. Uses Hibernation API for WS connections and `ctx.getWebSockets()` for broadcasting.
-- **Hono routes** (`main.ts`): Rewritten to forward all room operations to the DO via `stub.fetch()`. Removed Redis/SSE dependencies. Routes for create, read, join, leave, start, turn, and WS upgrade all work end-to-end.
-- **Entry point** (`index.ts`): Exports both the DO class (for wrangler binding) and the fetch handler.
-- **Type declarations** (`cloudflare.d.ts`): Custom types for `cloudflare:workers` module and `DurableObjectNamespace` global.
+**M2-6** — DO lifecycle tests:
+- Created `packages/api/src/__tests__/room-do.test.ts` with 16 tests
+- Tests exercise: create, read, join (2 players), rejoin idempotency, start, turn, leave, error cases (no-session join, unknown room), WebSocket connect and state snapshot
+- All tests pass against `wrangler dev` on port 8787
+- Added `"test": "bun test"` script to API package.json
+- Removed `ioredis` from dependencies (no longer imported anywhere)
 
-All checks pass. All HTTP endpoints verified against running wrangler dev instance.
+**M2-7** — Documentation and cleanup:
+- Updated README.md: removed Docker/SSE/Redis references, updated status table, repo layout, configuration table, commands, game rules section
+- Updated AGENTS.md: removed Docker commands, simplified probe/commands/probes, updated architecture map, date stamp, P0 landmines table
+- Rewrote `scripts/smoke.sh`: removed Redis branching, uses cookies for session persistence
+- Updated `.pi/skills/tahoe-verify/SKILL.md`: removed Docker path, Redis inspection, updated expected results
+- Cleaned env files: removed `REDIS_HOST`/`REDIS_URL` from `.env.example` and `.env.development`
+- Deleted Dockerfiles and Makefile (no longer needed for Wrangler-only dev)
+- Added `test:api` script to root package.json
 
-**Debugging note**: The DO `fetch()` dispatch must explicitly call out each path (`/start`, `/turn`) — it doesn't fall through from other POST paths. The initial write of the DO omitted the `/start` and `/turn` dispatch entries, causing 404 from the DO even after the Hono route correctly forwarded requests.
-
-Next: **M2-5** (refresh events.ts), **M2-6** (DO lifecycle tests), or **M2-7** (documentation cleanup).
+Next: **M3-1** (standardize errors) or **M3-2** (room lifecycle: crypto IDs, collision check, 404, TTL).

@@ -19,7 +19,17 @@ export const eventHandlers: { [K in EventName]: Handler<K> } = {
     'player-left': (data) => {
         playerState.playerIds = data.playerIds
     },
-    'participant-change': (data) => {
-        console.log('Participants changed:', data.participants)
+    'state': (data) => {
+        roomState.roll = data.roll
+        roomState.turn = data.turn
+        roomState.board = data.board
+        roomState.stage = data.stage
+        if (data.playerPosition >= 0) {
+            playerState.playerId = data.playerPosition
+        }
+        playerState.playerIds = data.playerIds
+    },
+    'error': (data) => {
+        console.error('Server error:', data.message)
     },
 }

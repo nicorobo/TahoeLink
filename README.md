@@ -12,20 +12,22 @@ pieces of their own color.
 | Area | State |
 | ---- | ----- |
 | Room creation, seat selection, join/leave in the lobby | Works |
-| Start game | API endpoint only; no min-player check and no UI button |
+| Start game | API endpoint works; no min-player check or turn-order dice |
 | Turn ownership, dice roll, shape-vs-roll validation | Missing |
-| Board drop/gravity | Works for in-bounds moves; crashes or loses pieces on overflow |
-| Scoring, piece supply, end condition, winner | Missing |
+| Board drop/gravity | Works for in-bounds moves |
+| Rules engine (scoring, supply, die, turn-skip, blocked-groups) | Implemented in `shared` with tests |
+| Scoring, end condition, winner | Missing (engine done, not wired to server) |
 | Game screen | Placeholder `<div>`; board/piece components exist but are unused |
-| Realtime (SSE) | Basic broadcast only; no heartbeat, snapshot, or reconnect resync |
-| Tests, CI, deployment | None yet (see [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)) |
+| Realtime (WebSocket) | Connected via Durable Objects; no heartbeat or reconnect resync |
+| Tests (shared engine) | 182 tests pass; API lifecycle tests added |
+| CI, deployment | See [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) |
 
 ## Stack
 
 | Layer      | Technology                                                                 |
 | ---------- | -------------------------------------------------------------------------- |
 | Web        | SvelteKit 2, Svelte 5 runes, Tailwind CSS 4, Vite 7                        |
-| API        | Hono 4 + Zod, wrangler dev (Cloudflare Workers / Durable Objects target)   |
+| API        | Hono 4 + Zod, wrangler dev (Cloudflare Workers + Durable Objects)           |
 | Shared     | `@tahoelink/shared` — types, wire events, board/shape engine (no runtime deps) |
 
 ## Repository layout
@@ -35,15 +37,16 @@ packages/
   app/      SvelteKit frontend
     src/lib/api.ts              API client (no response/error handling yet)
     src/lib/state.svelte.ts     client-side $state stores (room, player, piece)
-    src/lib/events/             SSE event handlers
+    src/lib/events/             WebSocket event handlers
     src/lib/components/         Board, PieceDisplay, PieceControl, lobby components
     src/routes/                 landing page + /room/[roomId]
-  api/      Hono server (Workers-compatible)
-    src/main.ts                 routes: create/join/leave/start/turn/get-room/SSE
-    src/index.ts                Workers entry point
-    src/models/                 Redis persistence for rooms and players
-    src/broadcasting/           in-process SSE client registry + broadcasts
-    src/middleware/             session cookie, SSE headers
+  api/      Hono server (Workers-compatible, Durable Objects)
+    src/main.ts                 routes: create/join/leave/start/turn/get-room/WS
+    src/index.ts                Workers entry point + DO class export
+    src/durable-objects/        RoomDurableObject (seats, state, WebSocket)
+    src/middleware/             session cookie
+    src/types/                  cloudflare.d.ts (custom type declarations)
+    src/__tests__/              DO lifecycle tests (bun test)
     player-flow.txt             original lobby/game-flow notes (still relevant)
     data-model.txt              original data-model notes
   shared/   Pure TypeScript domain package
@@ -89,17 +92,10 @@ bun run dev:web   # just the web app
 bun run dev       # both (requires `bun install` at root for concurrently)
 ```
 
-### Docker Compose (legacy, being phased out)
-
-The old Docker Compose stack (nginx + Redis + Bun) still exists but is no longer the
-recommended dev path. See `docker-compose.yml` and `Makefile` if you need it.
-
 ## Configuration
 
 | Variable          | Used by | Default   | Notes                                                         |
 | ----------------- | ------- | --------- | ------------------------------------------------------------- |
-| `PORT`            | API     | `3000`    |                                                               |
-| `REDIS_HOST`      | API     | `redis`   | Docker service name. Use `localhost` for native dev.          |
 | `COOKIE_SECURE`   | API     | auto      | Derived from `X-Forwarded-Proto`; set `false` for plain HTTP  |
 | `PUBLIC_API_BASE` | web     | `/api`    | Override for split deployments                                |
 
@@ -113,6 +109,7 @@ cd packages/app && bun run dev           # SvelteKit dev server
 cd packages/app && bun run check         # svelte-check + TypeScript
 cd packages/app && bun run build         # production build
 cd packages/shared && bun test           # run engine tests
+cd packages/api && bun test              # run DO lifecycle tests (needs wrangler dev)
 cd packages/shared && bunx tsc --noEmit  # typecheck shared
 cd packages/api && bunx tsc --noEmit     # typecheck API
 ```
@@ -128,7 +125,9 @@ cd packages/api && bunx tsc --noEmit     # typecheck API
 
 ## Game rules
 
-The implementation currently covers the board, five tetrominoes, four rotations, mirroring,
-and vertical drop. The **scoring, piece supply, and end-of-game rules are not written down
-anywhere in the repo** and must be confirmed from the rulebook before they can be coded.
-See [PLAN.md § Rules contract](./PLAN.md#rules-contract).
+All confirmed rules are documented in [docs/GAME_RULES.md](./docs/GAME_RULES.md) and
+codified as tests in `packages/shared`. The rules engine covers placement, gravity, dice
+rolling, scoring (links + empty-space penalty), piece supply, skip-turn, blocked-group
+detection, and 2-player shared-colour mode.
+
+See [PLAN.md § Rules contract](./PLAN.md#rules-contract) for the implementation status.

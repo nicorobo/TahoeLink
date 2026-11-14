@@ -246,12 +246,14 @@ broadcasting are deleted.
       `ctx.getWebSockets()`. Remove `broadcasting/` and `middleware/sse.ts`.
 - [x] **M2-4** Move join/leave into DO methods: join assigns a seat, leave frees it,
       both broadcast the updated state. Remove `models/players.ts`.
-- [ ] **M2-5** Refresh `shared/src/events.ts` for WebSocket payloads: `connected`,
-      `participant-change`, `state`, `error`. Fix the existing type mismatches (D7).
-- [ ] **M2-6** Test DO lifecycle with `SELF.fetch()` (miniflare-compatible): create room,
-      read state, join, leave, verify WebSocket connect/disconnect.
-- [ ] **M2-7** Document the new dev workflow (two terminals: `bun run dev` + `bunx wrangler dev`);
-      remove Redis from all docs and scripts; delete Docker Compose if no longer needed.
+- [x] **M2-5** Refresh `shared/src/events.ts` for WebSocket payloads: `connected`,
+      `state`, `error`. Removed `participant-change` (SSE-era). Fix event handlers in app.
+- [x] **M2-6** Test DO lifecycle with HTTP + WebSocket: create room, read state, join,
+      leave, start, turn, verify rejoin idempotency, WebSocket connect/state snapshot.
+      16 tests pass.
+- [x] **M2-7** Document the Wrangler-only dev workflow; remove Redis from all docs, env
+      files, and scripts; delete Dockerfiles and Makefile; update AGENTS.md, README.md,
+      and tahoe-verify skill; remove `ioredis` from dependencies.
 
 **Acceptance:** `bunx wrangler dev` runs the API without Redis; create/join/leave work over
 WebSocket; old Redis/SSE files are deleted; DO tests pass in CI.
