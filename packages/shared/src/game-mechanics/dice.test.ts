@@ -76,4 +76,27 @@ describe("rollDie", () => {
         const result = rollDie()
         expect(DICE_FACES).toContain(result)
     })
+
+    test("distribution is approximately uniform over many rolls", () => {
+        const counts: Record<string, number> = { I: 0, O: 0, T: 0, L: 0, SZ: 0, any: 0 }
+        // Park-Miller LCG with fixed seed
+        let state = 42
+        const lcg = () => {
+            state = (state * 16807) % 2147483647
+            return (state - 1) / 2147483646.0
+        }
+        const N = 6000
+        for (let i = 0; i < N; i++) {
+            const face = rollDie(lcg)
+            counts[face]!++
+        }
+        // Expected: N/6 = 1000 per face
+        // With N = 6000, expected count = 1000, standard deviation ≈ 28.9
+        // Allow generous margin of 150 (≈5 sigma, p < 3e-7 per face)
+        const expected = N / 6
+        const margin = 150
+        for (const [face, count] of Object.entries(counts)) {
+            expect(Math.abs(count - expected)).toBeLessThan(margin)
+        }
+    })
 })

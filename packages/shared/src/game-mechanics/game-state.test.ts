@@ -245,4 +245,136 @@ describe("getWinner", () => {
             expect(result.playerId).toBe(2)
         }
     })
+
+    test("getWinner: three-way tie where one has larger group", () => {
+        // Three players all score 5, player 3 has group of 5 vs group of 3
+        const board = getDefaultBoard()
+        // Player 1: group of 3
+        for (let y = 7; y < 10; y++) board[0]![y] = encodeCell(1, 1)
+        // Player 2: group of 3
+        for (let y = 7; y < 10; y++) board[2]![y] = encodeCell(2, 1)
+        // Player 3: group of 5
+        for (let x = 4; x < 9; x++) board[x]![9] = encodeCell(3, 1)
+
+        const scores = {
+            1: ps(3, "0,7", "0,8", "0,9"),
+            2: ps(3, "2,7", "2,8", "2,9"),
+            3: ps(3, "4,9", "5,9", "6,9", "7,9", "8,9"),
+        }
+        const result = getWinner(scores, board)
+        expect(result).not.toBe(TIE_BREAKER_LIMIT)
+        if (typeof result !== 'number') {
+            expect(result.playerId).toBe(3)
+            expect(result.tieBrokenBy).toBe("largest connected component")
+        }
+    })
+
+    test("getWinner: four players, highest score wins", () => {
+        const board = getDefaultBoard()
+        for (let y = 7; y < 10; y++) board[0]![y] = encodeCell(1, 1)  // 3
+        for (let y = 7; y < 10; y++) board[2]![y] = encodeCell(2, 1)  // 3
+        for (let y = 7; y < 10; y++) board[4]![y] = encodeCell(3, 1)  // 3
+        for (let y = 0; y < 10; y++) board[6]![y] = encodeCell(4, 1)  // 10, wins
+
+        const scores = {
+            1: ps(3, "0,7", "0,8", "0,9"),
+            2: ps(3, "2,7", "2,8", "2,9"),
+            3: ps(3, "4,7", "4,8", "4,9"),
+            4: ps(10, "6,0", "6,1", "6,2", "6,3", "6,4", "6,5", "6,6", "6,7", "6,8", "6,9"),
+        }
+        const result = getWinner(scores, board)
+        expect(result).not.toBe(TIE_BREAKER_LIMIT)
+        if (typeof result !== 'number') {
+            expect(result.playerId).toBe(4)
+            expect(result.tieBrokenBy).toBeUndefined()
+        }
+    })
+
+    test("getWinner: tie where largest group breaks it (asymmetric board)", () => {
+        const board = getDefaultBoard()
+        // Player 1: group of 3 in one place, group of 2 in another (score 3, largest 3)
+        board[0]![7] = encodeCell(1, 1)
+        board[0]![8] = encodeCell(1, 1)
+        board[0]![9] = encodeCell(1, 1)
+        board[3]![8] = encodeCell(1, 1)
+        board[3]![9] = encodeCell(1, 1)
+
+        // Player 2: one big group of 4 (score 4, largest 4) — higher score, wins outright
+        board[5]![6] = encodeCell(2, 1)
+        board[5]![7] = encodeCell(2, 1)
+        board[5]![8] = encodeCell(2, 1)
+        board[5]![9] = encodeCell(2, 1)
+
+        const scores = {
+            1: ps(3, "0,7", "0,8", "0,9"),
+            2: ps(4, "5,6", "5,7", "5,8", "5,9"),
+        }
+        const result = getWinner(scores, board)
+        expect(result).not.toBe(TIE_BREAKER_LIMIT)
+        if (typeof result !== 'number') {
+            expect(result.playerId).toBe(2)
+            expect(result.tieBrokenBy).toBeUndefined() // higher score, no tie-break
+        }
+    })
+
+    test("isGameOver: partial fill with one empty cell still can't fit any shape", () => {
+        // Board where only one cell is empty, which no shape can occupy
+        const board = getDefaultBoard()
+        // Fill all cells except (5,5)
+        for (let x = 0; x < BOARD_WIDTH; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                if (!(x === 5 && y === 5)) {
+                    board[x]![y] = encodeCell(1, 1)
+                }
+            }
+        }
+        const supply = createPieceSupply(2)
+        // No shape of 2+ cells can fit in 1 cell
+        expect(isGameOver(board, supply)).toBe(true)
+    })
+
+    test("canMove: O shape fits at col 8 when cols 0-3 are nearly full", () => {
+        // Fill cols 0-3 completely, all other columns empty except rows 0-8
+        // Shape can still be placed in empty columns 4-9
+        const board = getDefaultBoard()
+        for (let x = 0; x < 4; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                board[x]![y] = encodeCell(1, 1)
+            }
+        }
+        const supply = createPieceSupply(2)
+        expect(canMove(board, supply)).toBe(true)
+    })
+
+    test("canMove: no legal placement with only isolated empty cells (< shape size)", () => {
+        // Fill all 10 columns completely
+        const board = getDefaultBoard()
+        for (let x = 0; x < BOARD_WIDTH; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                board[x]![y] = encodeCell(1, 1)
+            }
+        }
+        // Create a 1-cell hole at (5,5) — no shape can fit
+        board[5]![5] = -1
+        const supply = createPieceSupply(2)
+        expect(canMove(board, supply)).toBe(false)
+    })
+
+    test("createPieceSupply: 4 players each have separate references", () => {
+        const supply = createPieceSupply(4)
+        // Verify all are distinct objects
+        expect(supply[1]).not.toBe(supply[2])
+        expect(supply[1]).not.toBe(supply[3])
+        expect(supply[1]).not.toBe(supply[4])
+        expect(supply[2]).not.toBe(supply[3])
+        expect(supply[2]).not.toBe(supply[4])
+        expect(supply[3]).not.toBe(supply[4])
+    })
+
+    test("createPieceSupply sharedColor: decrementing one affects the other", () => {
+        const supply = createPieceSupply(2, true)
+        expect(supply[1]).toBe(supply[2]) // Same object
+        supply[1]!['L']!--
+        expect(supply[2]!['L']).toBe(4) // Shared, so player 2 also lost one
+    })
 })

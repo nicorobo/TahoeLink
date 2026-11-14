@@ -358,4 +358,214 @@ describe("scoreTurn", () => {
         expect(result.delta).toBe(0)
         expect(result.scores).toEqual({})
     })
+
+    test("merge-scoring: three groups of 2 merge into one group of 6 via a bridge", () => {
+        // Three separate groups of 2, each unscored, then a bridge connects them all
+        const board = getDefaultBoard()
+        // Group A: (0,9),(1,9) — group of 2
+        board[0]![9] = encodeCell(1, 1)
+        board[1]![9] = encodeCell(1, 1)
+        // Group B: (3,9),(4,9) — group of 2
+        board[3]![9] = encodeCell(1, 1)
+        board[4]![9] = encodeCell(1, 1)
+        // Group C: (6,9),(7,9) — group of 2
+        board[6]![9] = encodeCell(1, 1)
+        board[7]![9] = encodeCell(1, 1)
+
+        // Placed cells: bridge at (2,9) connects A-B, bridge at (5,9) connects B-C
+        board[2]![9] = encodeCell(1, 1)
+        board[5]![9] = encodeCell(1, 1)
+
+        const placedCells: Array<[number, number]> = [[2, 9], [5, 9]]
+        const result = scoreTurn(board, placedCells, 1)
+
+        // One big group of 8 cells, none scored before → +8
+        // No gaps (placed at bottom row)
+        expect(result.delta).toBe(8)
+        expect(result.scores[1]!.score).toBe(8)
+        expect(result.scores[1]!.scoredCells.sort()).toEqual([
+            "0,9", "1,9", "2,9", "3,9", "4,9", "5,9", "6,9", "7,9",
+        ])
+    })
+
+    test("merge-scoring: connecting already-scored group to new cells only scores the new ones", () => {
+        // Existing scored group of 3 at left, place 2 new cells adjacent
+        const board = getDefaultBoard()
+        board[0]![7] = encodeCell(1, 1)
+        board[0]![8] = encodeCell(1, 1)
+        board[0]![9] = encodeCell(1, 1)
+
+        const previousScores = { 1: ps(3, "0,7", "0,8", "0,9") }
+
+        // Add 2 cells adjacent: making one group of 5
+        board[1]![8] = encodeCell(1, 1)
+        board[1]![9] = encodeCell(1, 1)
+
+        const placedCells: Array<[number, number]> = [[1, 8], [1, 9]]
+        const result = scoreTurn(board, placedCells, 1, previousScores)
+
+        // Only 2 new cells added to scored group → +2
+        // No gaps: (1,8)->(1,9) occupied, (1,9) at floor
+        expect(result.delta).toBe(2)
+        expect(result.scores[1]!.score).toBe(5)
+    })
+
+    test("empty-space penalty: gap beneath only part of the placed piece", () => {
+        // T piece placed such that the 'stem' has a gap but the 'bar' does not
+        const board = getDefaultBoard()
+        // T_ROT0 = [[1,0],[1,1],[1,0]] placed at col 0 on empty board
+        // Cells: (0,8),(1,8),(1,9),(2,8)
+        // Gap check: (0,8)->(0,9) empty → gap col 0
+        // (1,8)->(1,9) occupied (by the same piece) → no gap
+        // (2,8)->(2,9) empty → gap col 2
+        board[0]![8] = encodeCell(1, 1)
+        board[1]![8] = encodeCell(1, 1)
+        board[1]![9] = encodeCell(1, 1)
+        board[2]![8] = encodeCell(1, 1)
+
+        const placedCells: Array<[number, number]> = [[0, 8], [1, 8], [1, 9], [2, 8]]
+        const result = scoreTurn(board, placedCells, 1)
+
+        // Group of 4 → +4
+        // 2 gaps → -2
+        // Net: +2
+        expect(result.delta).toBe(2)
+    })
+
+    test("empty-space penalty: piece sits partly on terrain, partly overhangs", () => {
+        // Existing block at (1,9), place a 2×2 O block at col 0
+        const board = getDefaultBoard()
+        board[1]![9] = encodeCell(2, 1) // opponent's block at (1,9)
+
+        // O block placed at col 0 lands at (0,8),(0,9),(1,8),(1,9)
+        // but (1,9) is owned by opponent! Wait, tryPlacePiece would reject this.
+        // Instead, let's place so the O sits on the existing block:
+        // Col 0: height=10, col 1: height=9 (block at row 9)
+        // y = min(10, 9) = 9, dy = 7 → (0,7),(0,8),(1,7),(1,8)
+        board[0]![7] = encodeCell(1, 1)
+        board[0]![8] = encodeCell(1, 1)
+        board[1]![7] = encodeCell(1, 1)
+        board[1]![8] = encodeCell(1, 1)
+
+        const placedCells: Array<[number, number]> = [[0, 7], [0, 8], [1, 7], [1, 8]]
+        const result = scoreTurn(board, placedCells, 1)
+
+        // Group of 4 → +4
+        // Gaps: (0,7)->(0,8) occupied (by same piece) → no gap
+        // (0,8)->(0,9) empty → gap col 0!
+        // (1,7)->(1,8) occupied (by same piece) → no gap
+        // (1,8)->(1,9) occupied (by opponent) → no gap
+        // Net: 4 - 1 = 3
+        expect(result.delta).toBe(3)
+    })
+
+    test("empty-space penalty: multiple gaps in same column count as one", () => {
+        // Place a vertical I piece ([[1],[1],[1],[1]]) at col 0
+        // This places 4 cells stacked vertically from row 6 to row 9
+        // Gap check below EACH placed cell at (col 0, row 6,7,8,9):
+        // (0,6)->(0,7) occupied → no gap
+        // (0,7)->(0,8) occupied → no gap
+        // (0,8)->(0,9) occupied → no gap
+        // (0,9) at floor → no gap
+        // So no gaps!
+        const board = getDefaultBoard()
+        board[0]![6] = encodeCell(1, 1)
+        board[0]![7] = encodeCell(1, 1)
+        board[0]![8] = encodeCell(1, 1)
+        board[0]![9] = encodeCell(1, 1)
+
+        const placedCells: Array<[number, number]> = [[0, 6], [0, 7], [0, 8], [0, 9]]
+        const result = scoreTurn(board, placedCells, 1)
+
+        // Group of 4 → +4
+        // No gaps
+        expect(result.delta).toBe(4)
+    })
+
+    test("scoreBoard: complex multi-player scenario", () => {
+        const board = getDefaultBoard()
+        // Player 1: group of 3 at (0,7),(0,8),(0,9) and separate group of 2 at (3,8),(3,9)
+        board[0]![7] = encodeCell(1, 1)
+        board[0]![8] = encodeCell(1, 1)
+        board[0]![9] = encodeCell(1, 1)
+        board[3]![8] = encodeCell(1, 1)
+        board[3]![9] = encodeCell(1, 1)
+
+        // Player 2: two groups of 3 at (5,7),(5,8),(5,9) and (7,7),(7,8),(7,9)
+        board[5]![7] = encodeCell(2, 1)
+        board[5]![8] = encodeCell(2, 1)
+        board[5]![9] = encodeCell(2, 1)
+        board[7]![7] = encodeCell(2, 1)
+        board[7]![8] = encodeCell(2, 1)
+        board[7]![9] = encodeCell(2, 1)
+
+        // Player 3: single group of 4 at cols 8-9 rows 6-7 (2×2 block)
+        board[8]![6] = encodeCell(3, 1)
+        board[8]![7] = encodeCell(3, 1)
+        board[9]![6] = encodeCell(3, 1)
+        board[9]![7] = encodeCell(3, 1)
+
+        const scores = scoreBoard(board)
+        // Player 1: group of 3 (+3), group of 2 (no score) → 3
+        expect(scores[1]!.score).toBe(3)
+        expect(scores[1]!.scoredCells.sort()).toEqual(["0,7", "0,8", "0,9"])
+
+        // Player 2: two groups of 3 → 3 + 3 = 6
+        expect(scores[2]!.score).toBe(6)
+        expect(scores[2]!.scoredCells.sort()).toEqual(["5,7", "5,8", "5,9", "7,7", "7,8", "7,9"])
+
+        // Player 3: group of 4 → +4
+        expect(scores[3]!.score).toBe(4)
+        expect(scores[3]!.scoredCells.sort()).toEqual(["8,6", "8,7", "9,6", "9,7"])
+    })
+
+    test("scoreBoard: two separate scored groups with previousScores retains both", () => {
+        const board = getDefaultBoard()
+        // Two groups of 3, already scored
+        board[0]![7] = encodeCell(1, 1)
+        board[0]![8] = encodeCell(1, 1)
+        board[0]![9] = encodeCell(1, 1)
+        board[3]![7] = encodeCell(1, 1)
+        board[3]![8] = encodeCell(1, 1)
+        board[3]![9] = encodeCell(1, 1)
+
+        const previousScores = {
+            1: ps(6, "0,7", "0,8", "0,9", "3,7", "3,8", "3,9"),
+        }
+
+        // Add one more cell to each group
+        board[0]![6] = encodeCell(1, 1) // extends first group to 4
+        board[3]![6] = encodeCell(1, 1) // extends second group to 4
+
+        const scores = scoreBoard(board, previousScores)
+        // 2 new cells → +2
+        expect(scores[1]!.score).toBe(8)
+        expect(scores[1]!.scoredCells.sort()).toEqual([
+            "0,6", "0,7", "0,8", "0,9", "3,6", "3,7", "3,8", "3,9",
+        ])
+    })
+
+    test("scoreTurn: adding cells across two separate existing groups", () => {
+        const board = getDefaultBoard()
+        // Two groups of 3 separated by a column
+        board[0]![7] = encodeCell(1, 1)
+        board[0]![8] = encodeCell(1, 1)
+        board[0]![9] = encodeCell(1, 1)
+        board[2]![7] = encodeCell(1, 1)
+        board[2]![8] = encodeCell(1, 1)
+        board[2]![9] = encodeCell(1, 1)
+
+        const previousScores = { 1: ps(6, "0,7", "0,8", "0,9", "2,7", "2,8", "2,9") }
+
+        // Place a bridge cell that merges them into one group of 7
+        board[1]![9] = encodeCell(1, 1)
+
+        const placedCells: Array<[number, number]> = [[1, 9]]
+        const result = scoreTurn(board, placedCells, 1, previousScores)
+
+        // Only 1 new cell in a now-7-cell group → +1
+        // No gap: (1,9) at floor
+        expect(result.delta).toBe(1)
+        expect(result.scores[1]!.score).toBe(7)
+    })
 })

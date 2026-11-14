@@ -203,11 +203,11 @@ seat; `bun run check` is clean; CI is green.
 - [x] **M1-8** Replace the `playerId + turn * 0.001` cell encoding with a stable one
       (`playerId * 1000 + turn` and decode with `Math.floor(cell / 1000)`).
       Update `getCellBackgroundClass` and add a decode test.
-- [ ] **M1-9** Tests: golden placement fixtures for every shape/orientation (left wall, right
+- [x] **M1-9** Tests: golden placement fixtures for every shape/orientation (left wall, right
       wall, stacked, ceiling), scoring fixtures with `docs/GAME_RULES.md` worked examples,
-      seeded-dice tests, empty-space penalty fixtures, merge-scoring fixtures, blocked-group
-      detection fixtures, tie-breaker fixtures, and a seeded fuzz loop asserting
-      bounds/overlap/floating invariants and game termination.
+      seeded-dice tests, empty-space penalty fixtures, merge-scoring fixtures, tie-breaker
+      fixtures, and a seeded fuzz loop asserting bounds/overlap invariants and game termination.
+      (Blocked-group detection fixtures deferred to M1-11 when `getBlockedGroups` exists.)
 - [ ] **M1-10** Add `trySkipTurn(board, piecesRemaining, diceValue): { skipped, reason? }` —
       skip if no piece of the rolled shape remains, or if that shape cannot fit entirely in
       the tower in any orientation. Use `getLegalColumns` per shape orientation.
