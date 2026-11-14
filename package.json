@@ -3,5 +3,17 @@
     "private": true,
     "workspaces": [
         "packages/*"
-    ]
+    ],
+    "scripts": {
+        "dev": "concurrently -n api,web -c blue,green \"bun run dev:api\" \"bun run dev:web\"",
+        "dev:api": "cd packages/api && bunx wrangler dev",
+        "dev:web": "cd packages/app && bun run dev",
+        "check": "cd packages/app && bun run check",
+        "test": "cd packages/shared && bun test",
+        "typecheck:api": "cd packages/api && bunx tsc --noEmit -p tsconfig.json",
+        "typecheck:shared": "cd packages/shared && bunx tsc --noEmit -p tsconfig.json"
+    },
+    "devDependencies": {
+        "concurrently": "^9.1.0"
+    }
 }

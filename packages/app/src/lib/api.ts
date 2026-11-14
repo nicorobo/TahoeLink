@@ -1,7 +1,8 @@
 import type { Shape } from "@tahoelink/shared"
-import { browser } from '$app/environment';
 
-export const API_BASE = browser ? '/api' : 'http://api:3000';
+// Room page uses ssr = false, so API_BASE is always /api (proxied by Vite).
+// Override via PUBLIC_API_BASE env var for split deployments.
+export const API_BASE = import.meta.env.PUBLIC_API_BASE ?? '/api';
 
 export const api = {
     createRoom: async () => {

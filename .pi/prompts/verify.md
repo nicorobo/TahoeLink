@@ -9,7 +9,7 @@ This is a verification pass: do not fix code unless I ask.
 
 Report:
 
-1. Environment probe (bun, docker, redis-server, mkcert).
+1. Environment probe (bun, docker, mkcert, wrangler).
 2. Each command run, its exit code, and a one-line result.
 3. Failures with file:line and the shortest relevant output.
 4. Whether each failure is pre-existing (see docs/HANDOFF.md) or introduced by this change.

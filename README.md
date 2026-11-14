@@ -25,27 +25,8 @@ pieces of their own color.
 | Layer      | Technology                                                                 |
 | ---------- | -------------------------------------------------------------------------- |
 | Web        | SvelteKit 2, Svelte 5 runes, Tailwind CSS 4, Vite 7                        |
-| API        | Bun, Hono 4, Zod, Server-Sent Events (SSE)                                 |
-| State      | Redis 7 (room hash, player-slot keys, player list)                         |
-| Local edge | nginx (TLS termination, `/api` reverse proxy, buffering disabled for SSE)  |
+| API        | Hono 4 + Zod, wrangler dev (Cloudflare Workers / Durable Objects target)   |
 | Shared     | `@tahoelink/shared` — types, wire events, board/shape engine (no runtime deps) |
-
-## How it fits together
-
-```
-Browser (SvelteKit + Tailwind)
-  │
-  ├── POST/GET /api/* ────────────────► nginx ──► Hono API (Bun) ──► Redis
-  │                                                  │
-  └── EventSource /api/sse/room/:id ────────────────►┘
-```
-
-- The browser talks only to the same origin. nginx serves the SvelteKit dev server and
-  proxies `/api/*` to the API, stripping the `/api` prefix.
-- Identity is a `session_id` httpOnly cookie set by the API.
-- Room state and seat assignments live in Redis. Live updates are pushed over SSE.
-- `@tahoelink/shared` is imported as TypeScript source (`"main": "src/index.ts"`), so it
-  needs no build step. It must stay free of DOM, Bun, Redis, and framework imports.
 
 ## Repository layout
 
@@ -57,8 +38,9 @@ packages/
     src/lib/events/             SSE event handlers
     src/lib/components/         Board, PieceDisplay, PieceControl, lobby components
     src/routes/                 landing page + /room/[roomId]
-  api/      Bun + Hono server
+  api/      Hono server (Workers-compatible)
     src/main.ts                 routes: create/join/leave/start/turn/get-room/SSE
+    src/index.ts                Workers entry point
     src/models/                 Redis persistence for rooms and players
     src/broadcasting/           in-process SSE client registry + broadcasts
     src/middleware/             session cookie, SSE headers
@@ -76,8 +58,7 @@ packages/
 ### Prerequisites
 
 - [Bun](https://bun.sh) 1.4+ (`bun --version`)
-- Docker Desktop / OrbStack (for the recommended path)
-- `mkcert` (installed automatically by `make certs` on macOS via Homebrew)
+- Node.js (for `svelte-check` and other npm-based tooling)
 
 Install workspace dependencies once from the repository root:
 
@@ -85,71 +66,33 @@ Install workspace dependencies once from the repository root:
 bun install
 ```
 
-### Option A — Docker Compose (recommended, matches production topology)
+### Wrangler dev (recommended, no Docker/Redis)
 
 ```bash
-make certs                 # generates localhost.crt / localhost.key (gitignored)
-docker compose up --build
+# Terminal 1: API via wrangler dev (simulates Workers environment)
+cd packages/api && bunx wrangler dev
+
+# Terminal 2: SvelteKit dev server
+cd packages/app && bun run dev
 ```
 
-Open **https://localhost**.
+- UI: **http://localhost:5173**
+- API health: `curl -s http://localhost:3000/health`
+- Vite proxies `/api/*` to the wrangler dev server (`http://localhost:3000`)
+- Room route uses `ssr = false`, so all API calls go through the browser via the proxy
 
-- HTTPS is required: the session cookie is `Secure`, and SSE runs through the same origin.
-- `http://localhost` redirects to `https://localhost`.
-- API health: `curl -k https://localhost/api/health` → `{"status":"ok",...}`
-- Ports: nginx `80`/`443`, app `5173`, API `3000`, Redis `6379`.
-- Live file sync: `docker compose watch` (instead of `up`), or rebuild after dependency
-  changes.
-- Reset all rooms: `docker compose down -v`.
-
-> `packages/app/README.Docker.md` is stale (it mentions port 3001). Ignore it.
-
-**Verification status:** the Compose path is the intended workflow but was not executed on
-the current machine because Docker is not installed. The native path below was partly
-verified (see the table).
-
-### Option B — Native Bun + Redis (not yet working end-to-end)
+Or use the concurrently shortcut from the root:
 
 ```bash
-# Terminal 1: Redis
-brew install redis
-redis-server
-
-# Terminal 2: API
-cd packages/api
-REDIS_HOST=localhost bun src/main.ts      # http://localhost:3000
-
-# Terminal 3: web
-cd packages/app
-bun run dev                               # http://localhost:5173
+bun run dev:api   # just the API
+bun run dev:web   # just the web app
+bun run dev       # both (requires `bun install` at root for concurrently)
 ```
 
-This path is currently broken in three specific ways (all tracked as **M0** tasks in
-[PLAN.md](./PLAN.md)):
+### Docker Compose (legacy, being phased out)
 
-1. `packages/app/src/lib/api.ts` hardcodes `/api` in the browser and `http://api:3000` on
-   the server. Vite has no `/api` proxy, so browser API calls 404, and SSR of
-   `/room/[roomId]` fails with `fetch failed` outside Docker.
-2. The session cookie is always `Secure`; persistence over plain `http://localhost` is
-   browser-dependent and unreliable.
-3. `REDIS_HOST` defaults to the Docker hostname `redis`.
-
-Once M0 is done, this path will work without Docker or TLS.
-
-## Verified baseline
-
-Checked on 2026-11-13 with Bun 1.4.4 on macOS:
-
-| Check                                   | Result                                                        |
-| --------------------------------------- | ------------------------------------------------------------- |
-| `bun src/main.ts` (API)                 | starts; `GET /health` returns 200                             |
-| `bun run dev` (app)                     | serves `/` with 200                                           |
-| `GET /room/abc` via plain Vite          | **500** (`fetch failed` — SSR tries `http://api:3000`)        |
-| `GET /api/health` via plain Vite        | **404** (no proxy)                                            |
-| `cd packages/app && bun run check`      | **fails**: 4 type-only-import errors in `packages/shared`     |
-| Tests                                   | none exist                                                    |
-| Docker / Redis / mkcert on this machine | not installed                                                 |
-| Session cookie over plain HTTP          | browser-dependent; use HTTPS (Compose) for reliable tests     |
+The old Docker Compose stack (nginx + Redis + Bun) still exists but is no longer the
+recommended dev path. See `docker-compose.yml` and `Makefile` if you need it.
 
 ## Configuration
 
@@ -157,27 +100,21 @@ Checked on 2026-11-13 with Bun 1.4.4 on macOS:
 | ----------------- | ------- | --------- | ------------------------------------------------------------- |
 | `PORT`            | API     | `3000`    |                                                               |
 | `REDIS_HOST`      | API     | `redis`   | Docker service name. Use `localhost` for native dev.          |
-| `REDIS_URL`       | —       | —         | Declared in `packages/api/.env.development` but not used yet. |
-| `NODE_ENV`        | both    | —         | Set to `development` by Compose.                              |
-| `PUBLIC_API_BASE` | web     | `/api`    | Planned (M0); browser API base.                               |
-| `API_INTERNAL_URL` | web    | —         | Planned (M0); SSR API base. Alternative: disable SSR on `/room`. |
-| `COOKIE_SECURE`   | API     | auto      | Planned (M0); derive from `X-Forwarded-Proto` or env.         |
+| `COOKIE_SECURE`   | API     | auto      | Derived from `X-Forwarded-Proto`; set `false` for plain HTTP  |
+| `PUBLIC_API_BASE` | web     | `/api`    | Override for split deployments                                |
 
 ## Common commands
 
 ```bash
 bun install                              # workspace install (root only)
-make certs                               # local TLS certs for nginx
-docker compose up --build                # full stack
-docker compose watch                     # full stack + file sync
-docker compose down -v                   # stop and delete Redis data
 
-cd packages/app && bun run dev           # SvelteKit dev server only
-cd packages/app && bun run check         # svelte-check + TypeScript (currently fails)
+cd packages/api && bunx wrangler dev     # API (Workers-compatible)
+cd packages/app && bun run dev           # SvelteKit dev server
+cd packages/app && bun run check         # svelte-check + TypeScript
 cd packages/app && bun run build         # production build
-cd packages/api && bun src/main.ts       # API only (needs Redis)
-cd packages/shared && bunx tsc --noEmit -p tsconfig.json
-cd packages/shared && bun test           # once tests exist
+cd packages/shared && bun test           # run engine tests
+cd packages/shared && bunx tsc --noEmit  # typecheck shared
+cd packages/api && bunx tsc --noEmit     # typecheck API
 ```
 
 ## Documentation

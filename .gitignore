@@ -3,3 +3,7 @@
 node_modules
 *.ideas.txt
 ideas.txt
+.wrangler
+.svelte-kit
+.env
+.dev.vars

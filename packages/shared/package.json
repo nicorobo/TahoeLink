@@ -3,7 +3,8 @@
   "version": "0.0.1",
   "main": "src/index.ts",
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist"
+    "build": "bun build ./src/index.ts --outdir ./dist",
+    "test": "bun test"
   },
   "devDependencies": {
     "@types/bun": "latest"

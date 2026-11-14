@@ -30,9 +30,9 @@ If something cannot be verified (no Docker, no rulebook), say so instead of clai
 
 ## 3. Commands
 
-Probe first: `command -v bun docker redis-server mkcert curl jq`
+Probe first: `command -v bun docker mkcert curl jq wrangler`
 
-Full stack (preferred; matches nginx/TLS/SSE):
+Full stack (Docker/nginx — works today but being replaced):
 
 ```bash
 bun install
@@ -42,16 +42,15 @@ docker compose up --build  # or: docker compose watch
 # API: curl -k https://localhost/api/health
 ```
 
-Native (currently blocked by M0; see `docs/HANDOFF.md`):
+Wrangler dev (target workflow after M0):
 
 ```bash
-redis-server
-cd packages/api && REDIS_HOST=localhost PORT=3000 bun src/main.ts
-cd packages/app && bun run dev
+cd packages/api && bunx wrangler dev          # Worker + DOs via miniflare
+cd packages/app && bun run dev                # SvelteKit dev server
+# UI:  http://localhost:5173
+# API: http://localhost:3000 (via wrangler dev)
+# No Redis, no Docker, no nginx
 ```
-
-Known native failures until M0: `/api/*` 404s, `/room/:id` 500s, and the always-`Secure`
-cookie is unreliable over plain HTTP.
 
 Checks:
 
@@ -102,7 +101,10 @@ Full verification, smoke tests, SSE/Redis inspection, and troubleshooting live i
 | `GET /health` | Status + timestamp |
 
 Redis keys: `room:<roomId>` (hash), `players:<roomId>` (list of seat IDs),
-`player:<roomId>:<seat>` (session ID). App entry points: `src/lib/api.ts` (client), `state.svelte.ts` (module-level
+`player:<roomId>:<seat>` (session ID). **Replaced by Durable Objects in M2:**
+Redis keys → DO SQLite storage; SSE → WebSocket (DO Hibernation API);
+fanout via `ctx.getWebSockets()` instead of `broadcastToRoom`.
+App entry points: `src/lib/api.ts` (client), `state.svelte.ts` (module-level
 `$state`), `events/` (SSE reducers), `routes/room/[roomId]/` (lobby; game screen is a
 placeholder). `Board`, `PieceDisplay`, `PieceControl`, `PlayerStatus`, and `JoinButtons`
 exist but are **unused**.
@@ -143,7 +145,7 @@ Full backlog, including P1/P2, is in `PLAN.md` § Defect backlog.
 | No scoring, piece supply, end condition, or winner | absent |
 | No game UI; board/piece components unused | `app/src/routes/room/[roomId]/+page.svelte:84` |
 | Always-`Secure` cookie makes plain-HTTP native dev unreliable | `api/src/middleware/sessionId.ts:10-15` |
-| Room read-modify-write is not atomic | `api/src/models/room.ts:31-44` |
+| Room read-modify-write is not atomic | `api/src/models/room.ts:31-44` (resolved by DO single-writer in M2) |
 
 ## 7. Workflow
 
@@ -168,7 +170,7 @@ board down to 360 px.
 | Layer | Tool | Cover |
 | --- | --- | --- |
 | Engine | `bun test` in `packages/shared` | placement, gravity, legality, scoring, win, seeded dice |
-| Server | `bun test` + `app.request()` + disposable Redis | join/start/turn/leave, auth, 4xx, reconnect |
+| Server | `bun test` + `SELF.fetch()` + DO binding | join/start/turn/leave, auth, 4xx, reconnect |
 | Realtime | Playwright, two contexts | broadcasts, reconnect, pause/resume |
 | Fuzz | seeded loop | no overlap/floating/out-of-bounds; games terminate |
 
@@ -200,11 +202,11 @@ Assert after random moves: occupied cells in bounds, owners never change, no flo
 
 ## 10. Deployment
 
-The current API cannot run on Cloudflare Workers as-is: `ioredis` needs TCP, the SSE registry
-is in-process, and the Bun server options are not portable. See
-[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) for the hybrid and Durable Object options, the
-migration map, Wrangler config, and the production checklist. Record the choice in
-`PLAN.md` before M6.
+Deployment choice **B (Durable Objects)** was recorded in `PLAN.md` on 2026-11-14.
+The DO migration happens in **M2** (foundation) and **M3** (state machine on DO).
+M6 handles Cloudflare configuration, CI/CD, and the production launch. See
+[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) for the architecture diagram, Wrangler config,
+DO skeleton, and production checklist.
 
 ## 11. Do not
 

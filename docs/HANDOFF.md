@@ -6,64 +6,77 @@ entries; older detail lives in git and `PLAN.md`, so archive rather than endless
 
 ## Snapshot
 
-- Date: 2026-11-13
-- Branch: `main`, based on `949a0e0`; docs are uncommitted
-- Current milestone: **M0 not started**
-- Next task: **M0-4** (typecheck), then **M0-1/M0-2/M0-3** (native dev path)
-- Deployment decision: **not made** (hybrid vs Cloudflare-native; see `docs/DEPLOYMENT.md`)
+- Date: 2026-11-14
+- Branch: `main`; all of M0 implemented and verified locally
+- Current milestone: **M0 complete** — Wrangler dev path works, checks pass, CI configured
+- Next task: **M1-2** (safe placement + `tryPlacePiece`)
 
 To resume: read `AGENTS.md`, then run `/task <next-id>`; use `/verify` before committing and
 `/handoff` at the end of the session.
 
 ## What changed last session
 
-- Added `AGENTS.md`, `PLAN.md`, `docs/DEPLOYMENT.md`, `docs/HANDOFF.md`.
-- Rewrote `README.md`.
-- Added agent scaffolding: `.pi/prompts/{task,handoff,verify}.md` and
-  `.pi/skills/tahoe-verify/SKILL.md`.
-- **No application code changed.**
+All nine M0 subtasks:
+
+| Task | Change | Files |
+|------|--------|-------|
+| M0-1 | Vite proxy `/api` → `localhost:3000`; `ssr = false` on room route; `API_BASE` simplified | `vite.config.ts`, `+page.ts`, `api.ts` |
+| M0-2 | Cookie `Secure` from `X-Forwarded-Proto`/`COOKIE_SECURE` env | `sessionId.ts` |
+| M0-3 | Swapped `node:crypto` for `crypto.randomUUID()` | `sessionId.ts` |
+| M0-4 | `wrangler.jsonc` + Workers entry (`src/index.ts`); verified `/health` | `wrangler.jsonc`, `index.ts` |
+| M0-5 | Fixed 4 type-only imports in `shared/src/events.ts` and `board.ts` | `events.ts`, `board.ts` |
+| M0-6 | Root scripts (`dev`, `dev:api`, `dev:web`, `check`, `test`) + shared test script | `package.json` (root + shared) |
+| M0-7 | `.env.example` files; cleaned `README.Docker.md`, `shared/bun.lock`; updated README | `.env.example` (api + app), `README.md` |
+| M0-8 | GitHub Actions CI workflow | `.github/workflows/ci.yml` |
+| M0-9 | Smoke script (health + optional full flow) | `scripts/smoke.sh` |
+
+Plus: lazy Redis connection (Proxy pattern) to avoid Workers module-scope crash; decisions
+log entries added for M0 choices.
 
 ## Verified evidence
 
 | Check | Result |
 | --- | --- |
-| API starts (`bun src/main.ts`) | yes; `GET /health` → 200 |
-| Web starts (`bun run dev`) | yes; `/` → 200 |
-| `GET /room/:id` via plain Vite | **500** (`fetch failed`, SSR to `http://api:3000`) |
-| `GET /api/health` via plain Vite | **404** (no proxy) |
-| `bun run check` | **fails**: 4 type-only-import errors in `packages/shared` |
-| `bun run build` | passes (adapter-auto warning; expected until M6) |
-| `packages/shared` typecheck | clean |
-| `packages/shared` tests | none exist |
-| Docker Compose path | **not run** (Docker absent) |
+| `bun run check` (app) | **0 errors**, 1 pre-existing a11y warning |
+| `bunx tsc --noEmit` (shared) | clean |
+| `bunx tsc --noEmit` (api) | clean |
+| `bunx wrangler dev` starts | yes, port 8787/8788 |
+| `GET /health` via wrangler | 200 — `{"status":"ok"}` |
+| `POST /create-room` via wrangler | **500** (no Redis — expected, M2) |
+| `GET /room/:id` SSR via browser | no longer attempted (ssr=false) |
+| `docker compose` | not tested (no Docker on this machine) |
 
-## Not verified
+## Not verified / known gaps
 
-- Docker/nginx/TLS/SSE end-to-end.
-- Any multiplayer flow (no playable game yet).
-- Browser cookie behavior over plain HTTP.
-- Cloudflare deployment options.
+- **Redis-dependent routes** (create-room, join, leave, start, turn) fail in wrangler dev
+  without a Redis instance. This is the pre-M2 state; M0 only makes the proxy, typecheck,
+  and CI work. Full end-to-end verification needs M2 (Durable Objects).
+- **SSE broadcasts** work only in the Bun/Redis path, not on wrangler dev (Redis needed for
+  lobby state). M2 replaces SSE with WebSocket via DO Hibernation API.
+- **Smoke script** tested locally — health check passes; full flow skipped (no Redis).
+- **Docker Compose** path unchanged; `README.md` updated to point to Wrangler as the
+  recommended dev path.
 
-## Open questions / decisions
+## Open questions
 
-- **Rules R1–R12** in `PLAN.md` § Rules contract are unanswered. Do not implement scoring
-  until the die faces, piece counts, link scoring, flips, skip/reroll, and end condition are
-  confirmed.
-- Deployment shape (hybrid vs Cloudflare-native) should be decided before M3/M6.
-- SSR for `/room`: leaning `ssr = false` (state is client-owned and SSE-driven).
+- M1 (rules engine) needs tests before implementation. First task: M1-2 (`tryPlacePiece`) +
+  golden fixtures.
+- Confirm that all rules R1–R17 in PLAN.md are correct before coding scoring.
 
 ## Environment
 
-- Bun 1.4.4, Node 24, macOS.
+- Bun 1.4.4, macOS.
 - Docker, Redis, and mkcert are **not installed** on this machine.
-- Docker path is the intended workflow; native path needs M0 first.
 
 ## Session log
 
-### 2026-11-13 — documentation + agent scaffolding
+### 2026-11-14 — M0: Runnable baseline on Wrangler
 
-- Added the docs and the `/task`, `/handoff`, `/verify` templates plus the `tahoe-verify`
-  skill.
-- Established the operating model: one deliverable per session, a Pendant goal per
-  milestone, subagents for exploration/review/verification.
-- Next: start M0 with `/task M0-4`, then `/task M0-1`.
+Implemented all 9 M0 subtasks. Key decisions:
+- SSR disabled on `/room/[roomId]` → no API base duality
+- Cookie Secure derived from `X-Forwarded-Proto` (auto-detect TLS)
+- Redis connection made lazy via Proxy (avoids Workers crash, prepares for M2 removal)
+- All checks now pass (typecheck + svelte-check = 0 errors)
+- CI workflow added; shared tests placeholder ready for M1
+
+Next: **M1-2** — safe placement function + tests.

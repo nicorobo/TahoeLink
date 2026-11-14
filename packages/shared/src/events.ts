@@ -1,4 +1,4 @@
-import { Board, DiceValue, RoomStage } from "./types"
+import type { Board, DiceValue, RoomStage } from "./types"
 
 export type ConnectedPayload = {
     roomId: string

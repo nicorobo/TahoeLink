@@ -1,5 +1,5 @@
 import { BOARD_HEIGHT, BOARD_WIDTH } from "../constants"
-import { Board } from "../types"
+import type { Board } from "../types"
 
 export const getDefaultBoard = () =>
     Array.from({ length: BOARD_WIDTH }, () =>
