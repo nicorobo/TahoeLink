@@ -15,12 +15,13 @@ interface PlayerState {
     playerIds: number[]
 }
 
-export const roomState = $state<Room>({
+export const roomState = $state<Room & { stateVersion: number }>({
     board: getDefaultBoard(),
     activePlayer: 0,
     turn: 0,
     roll: 'L',
-    stage: 'waiting-for-players'
+    stage: 'waiting-for-players',
+    stateVersion: 0,
 })
 
 export const playerState = $state<PlayerState>({

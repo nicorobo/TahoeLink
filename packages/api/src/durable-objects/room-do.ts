@@ -28,6 +28,7 @@ import { Err, HTTPException } from '../lib/http-error'
  */
 export interface RoomDOState {
   version: number
+  stateVersion: number
   board: Board
   /** 4 seats indexed 0–3, each holding a session ID or null for empty. */
   seats: (string | null)[]
@@ -52,9 +53,13 @@ const STATE_KEY = 'room:v2'
 /** Sliding TTL: reset on every mutation. Room is deleted after this idle period. */
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
 
+/** Heartbeat interval: broadcast a keepalive to WebSocket clients. */
+const HEARTBEAT_INTERVAL_MS = 20_000 // 20 seconds
+
 function defaultState(): RoomDOState {
   return {
     version: 2,
+    stateVersion: 0,
     board: getDefaultBoard(),
     seats: [null, null, null, null],
     activePlayerId: null,
@@ -145,10 +150,35 @@ export class RoomDurableObject extends DurableObject {
   // alarm — TTL-based room cleanup
   // ---------------------------------------------------------------------------
   override async alarm(): Promise<void> {
-    // Delete all stored data for this room
-    await this.ctx.storage.delete(STATE_KEY)
-    this._state = null
-    console.log('Room expired and cleaned up via alarm')
+    await this.ensureLoaded()
+    if (!this._state) return
+
+    const websockets = this.ctx.getWebSockets()
+    const hasConnections = websockets.length > 0
+
+    // Send heartbeat if there are connected clients
+    if (hasConnections) {
+      this.broadcast({
+        event: 'heartbeat',
+        data: { stateVersion: this._state.stateVersion },
+      })
+    }
+
+    // Check TTL: delete room if idle for too long
+    if (Date.now() - this._state.updatedAt > ROOM_TTL_MS) {
+      await this.ctx.storage.delete(STATE_KEY)
+      this._state = null
+      console.log('Room expired and cleaned up via alarm')
+      return
+    }
+
+    // Reschedule based on connection state
+    if (hasConnections) {
+      await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS)
+    } else {
+      // No active connections — sleep until TTL
+      await this.ctx.storage.setAlarm(this._state.updatedAt + ROOM_TTL_MS)
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -172,7 +202,17 @@ export class RoomDurableObject extends DurableObject {
 
     if (!tags?.sessionId) return
 
-    // If this session has a seat in an in-progress game, auto-leave
+    // Decrement connection counter for this session
+    const currentCount = this.wsConnections.get(tags.sessionId) ?? 0
+    if (currentCount <= 1) {
+      this.wsConnections.delete(tags.sessionId)
+    } else {
+      this.wsConnections.set(tags.sessionId, currentCount - 1)
+      // Still have other tabs connected — do not auto-leave
+      return
+    }
+
+    // This was the last WebSocket for this session — auto-leave if seated
     await this.ensureLoaded()
     if (!this._state || !this._state.initialized) return
 
@@ -214,14 +254,25 @@ export class RoomDurableObject extends DurableObject {
     }
   }
 
-  /** Persist current state to DO storage and reset the sliding TTL alarm. */
+  /** Persist current state to DO storage and schedule the next alarm. */
   private async persist(): Promise<void> {
     if (!this._state) return
+    this._state.stateVersion++
     this._state.updatedAt = Date.now()
     await this.ctx.storage.put(STATE_KEY, this._state)
-    // Reset the sliding TTL alarm on every mutation
-    await this.ctx.storage.setAlarm(Date.now() + ROOM_TTL_MS)
+
+    // If there are active WebSocket connections, use the shorter heartbeat interval.
+    // Otherwise sleep until the TTL expiry to avoid waking up for idle rooms.
+    const websockets = this.ctx.getWebSockets()
+    if (websockets.length > 0) {
+      await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS)
+    } else {
+      await this.ctx.storage.setAlarm(Date.now() + ROOM_TTL_MS)
+    }
   }
+
+  /** Track WebSocket connection count per session for multi-tab support. */
+  private wsConnections: Map<string, number> = new Map()
 
   /** Non-empty seat indices → player IDs. */
   private occupiedSeats(): number[] {
@@ -284,6 +335,7 @@ export class RoomDurableObject extends DurableObject {
         seats: state.seats,
         scores: state.scores,
         winner: state.winner,
+        stateVersion: state.stateVersion,
       }),
       { headers: { 'Content-Type': 'application/json' } },
     )
@@ -626,17 +678,6 @@ export class RoomDurableObject extends DurableObject {
     const url = new URL(request.url)
     const sessionId = url.searchParams.get('sessionId') ?? ''
 
-    // Check that the room is initialized before accepting WebSocket
-    // We load state synchronously-ish: fire-and-forget from fetch handler
-    // but we check the cached state. If the room doesn't exist, reject.
-    // Since ensureLoaded is async, we check _state here after a synchronous
-    // attempt. For the edge case where state isn't loaded yet, we optimistically
-    // accept the WebSocket — the state event will be empty if the room is
-    // unknown, and the client can handle that.
-    // The proper solution is to await ensureLoaded here, but fetch requires
-    // sync return for WebSocket 101 responses.
-    // Instead, we stored initialized state at persist time and check it.
-
     // Fire-and-forget load so state is warm for the state snapshot
     this.ensureLoaded()
 
@@ -646,13 +687,24 @@ export class RoomDurableObject extends DurableObject {
     this.ctx.acceptWebSocket(server, [sessionId])
     server.serializeAttachment({ sessionId })
 
-    // Send initial connection event
-    this.sendWsMessage(server, 'connected', { roomId: url.searchParams.get('roomId') ?? '' })
+    // Track this connection for multi-tab support
+    const currentCount = this.wsConnections.get(sessionId) ?? 0
+    this.wsConnections.set(sessionId, currentCount + 1)
+
+    // Send initial connection event with current state version
+    const version = this._state?.stateVersion ?? 0
+    this.sendWsMessage(server, 'connected', {
+      roomId: url.searchParams.get('roomId') ?? '',
+      stateVersion: version,
+    })
 
     // Send current room state snapshot if available
     if (this._state && this._state.initialized) {
       this.sendWsMessage(server, 'state', this.buildStatePayload(sessionId))
     }
+
+    // Schedule heartbeat-alarm since a connection just arrived
+    this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS).catch(() => {})
 
     return new Response(null, { status: 101, webSocket: client })
   }
@@ -680,6 +732,7 @@ export class RoomDurableObject extends DurableObject {
       stage: this._state.stage,
       scores: { ...this._state.scores },
       winner: this._state.winner,
+      stateVersion: this._state.stateVersion,
       playerIds,
       playerPosition,
       playerId: playerPosition >= 0 ? playerPosition : null,

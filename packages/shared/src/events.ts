@@ -2,6 +2,7 @@ import type { Board, DiceValue, RoomStage, Room } from "./types"
 
 export type ConnectedPayload = {
     roomId: string
+    stateVersion: number
 }
 
 /** Full state snapshot sent on WebSocket connect and after mutations. */
@@ -12,6 +13,7 @@ export type StatePayload = Room & {
     playerId: number | null
     scores: Record<number, number>
     winner: number | null
+    stateVersion: number
 }
 
 export type TurnStartPayload = {
@@ -35,6 +37,10 @@ export type GameOverPayload = {
     scores: Record<number, number>
 }
 
+export type HeartbeatPayload = {
+    stateVersion: number
+}
+
 export type ErrorPayload = {
     code: string
     message: string
@@ -48,6 +54,7 @@ export interface EventPayloadMap {
     'player-joined': PlayerJoinedPayload
     'player-left': PlayerLeftPayload
     'game-over': GameOverPayload
+    'heartbeat': HeartbeatPayload
     'error': ErrorPayload
 }
 

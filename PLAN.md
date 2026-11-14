@@ -297,10 +297,10 @@ persistence are inherent.
       - **Scoring**: apply `scoreTurn` — link scoring + empty-space penalty = net delta.
 - [x] **M3-6** Leave/pause/resume: free seat, set `paused`, freeze turns, allow replacement/
       rejoin, resume when re-filled. Handle the active player leaving (reassign or skip).
-- [ ] **M3-7** WebSocket snapshot on connect + monotonic version + heartbeat via DO alarm
+- [x] **M3-7** WebSocket snapshot on connect + monotonic version + heartbeat via DO alarm
       every 15–25 s. Clients ignore messages with older versions.
-- [ ] **M3-8** Handle multiple tabs with the same session; make rejoin idempotent.
-- [ ] **M3-9** API tests with `SELF.fetch()` and DO binding: happy-path 2/4-player game,
+- [x] **M3-8** Handle multiple tabs with the same session; make rejoin idempotent.
+- [x] **M3-9** API tests with `SELF.fetch()` and DO binding: happy-path 2/4-player game,
       invalid moves, wrong turn, stale version, leave/rejoin mid-game.
 
 **Acceptance:** a scripted game from create-room to a winner completes over HTTP + WebSocket;
@@ -486,7 +486,8 @@ than silently choosing.
 | 22 | Room TTL mechanism | DO alarm vs cron vs KV expiry | **DO alarm (sliding, reset on every persist)** | DO alarms fire at a set time and trigger `alarm()` handler; sliding expiry naturally extends on activity; no external cron needed | 2026-11-16 |
 | 23 | Room ID generation | `Math.random().toString(36)` vs `crypto.randomUUID()` vs base32 from random bytes | **5 bytes → 8 Crockford base32 chars** | Short enough for verbal sharing; avoids ambiguous I/L/O/U characters; crypto-strength randomness; 40-bit entropy with collision retry | 2026-11-16 |
 | 24 | Player ID convention for scores | 1-based (engine convention: seatIndex + 1) vs 0-based (seat index as-is) | **1-based scores in DO state** | Engine functions (`createPieceSupply`, `scoreTurn`, etc.) use 1-based player IDs; DO stores scores with 1-based keys and maps seatIndex → owner via +1/-1 at the engine boundary | 2026-11-16 |
-| 25 | Paused stage on leave | Block join entirely vs allow rejoin | **Allow join during paused** | Players who disconnected mid-game can rejoin via HTTP (same session gets idempotent rejoin, new session takes the freed seat) | 2026-11-16 |
+| 26 | Heartbeat mechanism | Separate heartbeat alarm vs combined TTL + heartbeat single alarm | **Single alarm for both** | DO only has one `setAlarm`; the alarm handler sends heartbeat (~20s) then checks TTL (24h) and reschedules. Idle rooms without WS connections use TTL interval to avoid waking up. | 2026-11-16 |
+| 27 | Multi-tab WebSocket tracking | Persisted vs in-memory connection counter | **In-memory `Map<string, number>`** | WebSocket connections are inherently ephemeral; on DO restart all connections are lost. No need to persist connection counts. | 2026-11-16 |
 
 ---
 
