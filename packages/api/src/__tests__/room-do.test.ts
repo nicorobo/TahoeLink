@@ -5,6 +5,21 @@ const BASE = "http://localhost:8787"
 let roomId = ""
 
 /**
+ * Map a roll value to a legal shape for testing.
+ */
+function legalShapeForRoll(roll: string): string {
+  const map: Record<string, string[]> = {
+    I: ["I"],
+    O: ["O"],
+    T: ["T"],
+    L: ["L"],
+    SZ: ["S"],
+    any: ["L"],
+  }
+  return (map[roll] ?? ["L"])[0]!
+}
+
+/**
  * Helper: sends a request with optional cookie header and returns
  * { response, cookie } — the cookie string for subsequent requests.
  */
@@ -126,6 +141,8 @@ describe("Room DO lifecycle", () => {
   // -----------------------------------------------------------------------
   // Start game
   // -----------------------------------------------------------------------
+  let startRoll = "" // captured from start response for turn test
+
   it("POST /room/:id/start transitions to in-progress", async () => {
     const { res, body } = await req(`/room/${roomId}/start`, {
       method: "POST",
@@ -133,31 +150,40 @@ describe("Room DO lifecycle", () => {
     })
     expect(res.status).toBe(200)
     expect(body.stage).toBe("in-progress")
+    expect(body.turn).toBe(1)
+    expect(body.roll).toBeDefined()
+    startRoll = body.roll as string
   })
 
   it("GET /room/:id confirms game is in-progress", async () => {
     const { body } = await req(`/room/${roomId}`, { cookie: c1 })
     expect(body.room.stage).toBe("in-progress")
     expect(body.room.activePlayer).toBe(0)
+    // Should include scores and winner fields
+    expect(body).toHaveProperty("scores")
+    expect(body).toHaveProperty("winner")
   })
 
   // -----------------------------------------------------------------------
   // Turn
   // -----------------------------------------------------------------------
-  it("POST /room/:id/turn increments turn count", async () => {
+  it("POST /room/:id/turn places piece and advances turn", async () => {
+    const shape = legalShapeForRoll(startRoll)
     const { res, body } = await req(`/room/${roomId}/turn`, {
       method: "POST",
       cookie: c1,
-      body: { column: 0, shape: "L", rotation: 0, flip: false },
+      body: { column: 0, shape, rotation: 0, flip: false },
     })
     expect(res.status).toBe(200)
-    expect(body.turn).toBe(1)
+    // Turn was 1 after start; after placement it should be 2 (incremented for next player)
+    expect(body.turn).toBe(2)
+    expect(body.stage).toBe("in-progress")
   })
 
   // -----------------------------------------------------------------------
   // Leave
   // -----------------------------------------------------------------------
-  it("POST /room/:id/leave removes player", async () => {
+  it("POST /room/:id/leave removes player and pauses game", async () => {
     const { res, body } = await req(`/room/${roomId}/leave`, {
       method: "POST",
       cookie: c2,
@@ -166,10 +192,12 @@ describe("Room DO lifecycle", () => {
     expect(body.playerIds).toEqual([0])
   })
 
-  it("GET /room/:id confirms player 2 left", async () => {
+  it("GET /room/:id confirms player 2 left and game is paused", async () => {
     const { body } = await req(`/room/${roomId}`, { cookie: c1 })
     expect(body.seats[1]).toBeNull()
     expect(body.playerIds).toEqual([0])
+    // Game should be paused since player left mid-game
+    expect(body.room.stage).toBe("paused")
   })
 
   // -----------------------------------------------------------------------

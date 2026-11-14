@@ -30,6 +30,11 @@ export type PlayerLeftPayload = {
     playerIds: number[]
 }
 
+export type GameOverPayload = {
+    winner: number | null
+    scores: Record<number, number>
+}
+
 export type ErrorPayload = {
     code: string
     message: string
@@ -42,6 +47,7 @@ export interface EventPayloadMap {
     'turn-start': TurnStartPayload
     'player-joined': PlayerJoinedPayload
     'player-left': PlayerLeftPayload
+    'game-over': GameOverPayload
     'error': ErrorPayload
 }
 

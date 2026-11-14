@@ -274,23 +274,28 @@ persistence are inherent.
       collision check (DO returns 409 Conflict, retry up to 5 attempts),
       404 for unknown rooms (state not auto-initialized), DO alarm-based 24h sliding TTL,
       `createdAt`/`updatedAt` (already existed).
-- [ ] **M3-3** Full join rules on DO: stage check, seat availability, `MAX_PLAYERS`,
+- [x] **M3-3** Full join rules on DO: stage check, seat availability, `MAX_PLAYERS`,
       idempotent rejoin for the same session, spectator mode, clear 4xx codes.
-- [ ] **M3-4** Start game: require `MIN_PLAYERS`, require an occupant, set turn order +
+      - Stage checks: `waiting-for-players` or `paused` only
+      - MAX_PLAYERS enforced via 4-element seats array (indexOf(null) returns -1 when full)
+      - Spectator mode: any WebSocket client connects without a seat (no HTTP join needed)
+      - All 4xx use structured `{ error: { code, message } }` format
+- [x] **M3-4** Start game: require `MIN_PLAYERS`, require an occupant, set turn order +
       first player, roll the die, transition stage, broadcast full snapshot via WebSocket.
       - **First player**: players must roll the die; whoever rolls TETRIS LINK first goes
         first. For the digital version, roll once at start and assign the first roller to
         TETRIS LINK (if no one rolls it, keep rolling).
       - **First-turn S/Z penalty**: if the starting player rolls S/Z on turn 1, the
-        empty-space penalty applies immediately (negative starting score).
-- [ ] **M3-5** Turn: verify active player, verify shape/rotation/flip/column against the
+        empty-space penalty applies immediately (negative starting score; implemented as
+        flat −1 on start, detected via `detectFirstTurnSZO`).
+- [x] **M3-5** Turn: verify active player, verify shape/rotation/flip/column against the
       roll and engine rules, apply placement, recompute score, advance to the next occupied
       seat, roll the next die, detect game over, broadcast snapshot.
       - **Skip turn**: if the rolled shape has no remaining pieces, or cannot fit in any
         column per `trySkipTurn`, skip the turn and advance to the next player.
       - **S/Z roll**: player may play **either** S or Z shape (in any orientation).
       - **Scoring**: apply `scoreTurn` — link scoring + empty-space penalty = net delta.
-- [ ] **M3-6** Leave/pause/resume: free seat, set `paused`, freeze turns, allow replacement/
+- [x] **M3-6** Leave/pause/resume: free seat, set `paused`, freeze turns, allow replacement/
       rejoin, resume when re-filled. Handle the active player leaving (reassign or skip).
 - [ ] **M3-7** WebSocket snapshot on connect + monotonic version + heartbeat via DO alarm
       every 15–25 s. Clients ignore messages with older versions.
@@ -480,6 +485,8 @@ than silently choosing.
 | 21 | Error response format | Plain string vs `{ code, message }` vs array | **`{ error: { code, message } }`** | Matches existing `ErrorPayload` in events.ts; machine-readable code enables client-side i18n; structured, not just a string | 2026-11-16 |
 | 22 | Room TTL mechanism | DO alarm vs cron vs KV expiry | **DO alarm (sliding, reset on every persist)** | DO alarms fire at a set time and trigger `alarm()` handler; sliding expiry naturally extends on activity; no external cron needed | 2026-11-16 |
 | 23 | Room ID generation | `Math.random().toString(36)` vs `crypto.randomUUID()` vs base32 from random bytes | **5 bytes → 8 Crockford base32 chars** | Short enough for verbal sharing; avoids ambiguous I/L/O/U characters; crypto-strength randomness; 40-bit entropy with collision retry | 2026-11-16 |
+| 24 | Player ID convention for scores | 1-based (engine convention: seatIndex + 1) vs 0-based (seat index as-is) | **1-based scores in DO state** | Engine functions (`createPieceSupply`, `scoreTurn`, etc.) use 1-based player IDs; DO stores scores with 1-based keys and maps seatIndex → owner via +1/-1 at the engine boundary | 2026-11-16 |
+| 25 | Paused stage on leave | Block join entirely vs allow rejoin | **Allow join during paused** | Players who disconnected mid-game can rejoin via HTTP (same session gets idempotent rejoin, new session takes the freed seat) | 2026-11-16 |
 
 ---
 

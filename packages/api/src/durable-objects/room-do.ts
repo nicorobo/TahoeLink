@@ -1,7 +1,22 @@
 // @ts-nocheck - cloudflare:workers is a runtime module provided by the Workers platform
 import { DurableObject } from 'cloudflare:workers'
-import type { Board, DiceValue, RoomStage } from '@tahoelink/shared'
-import { getDefaultBoard } from '@tahoelink/shared'
+import type { Board, DiceValue, RoomStage, Shape } from '@tahoelink/shared'
+import {
+  getDefaultBoard,
+  getShape,
+  tryPlacePiece,
+  rollDie,
+  legalShapesForDie,
+  scoreTurn,
+  getWinner,
+  trySkipTurn,
+  isGameOver,
+  createPieceSupply,
+  detectFirstTurnSZO,
+  encodeCell,
+  TIE_BREAKER_LIMIT,
+  MAX_PLAYERS,
+} from '@tahoelink/shared'
 import { Err, HTTPException } from '../lib/http-error'
 
 // ---------------------------------------------------------------------------
@@ -20,7 +35,10 @@ export interface RoomDOState {
   turn: number
   roll: DiceValue
   stage: RoomStage
+  /** Flat scores keyed by player ID (1-based = seatIndex + 1). */
   scores: Record<number, number>
+  /** Scored cell keys ("x,y") per player ID, used to avoid double-counting. */
+  scoredCells: Record<string, string[]>
   piecesRemaining: Record<string, Record<string, number>>
   winner: number | null
   /** True once handleInit has been called. Uninitialized DOs return 404. */
@@ -44,6 +62,7 @@ function defaultState(): RoomDOState {
     roll: 'I' as DiceValue,
     stage: 'waiting-for-players',
     scores: {},
+    scoredCells: {},
     piecesRemaining: {},
     winner: null,
     initialized: false,
@@ -150,7 +169,30 @@ export class RoomDurableObject extends DurableObject {
     console.log(
       `WebSocket closed: session=${tags?.sessionId ?? 'unknown'}, code=${code}, reason=${reason}`,
     )
-    // TODO: M3-6 — handle player leave mid-game via WebSocket close
+
+    if (!tags?.sessionId) return
+
+    // If this session has a seat in an in-progress game, auto-leave
+    await this.ensureLoaded()
+    if (!this._state || !this._state.initialized) return
+
+    const seatIndex = this.seatBySession(tags.sessionId)
+    if (seatIndex < 0) return
+
+    if (this._state.stage === 'in-progress') {
+      // Auto-leave and pause
+      this._state.seats[seatIndex] = null
+      this._state.stage = 'paused'
+
+      if (this._state.activePlayerId === seatIndex) {
+        const occupied = this.occupiedSeats()
+        this._state.activePlayerId = occupied.length > 0 ? occupied[0] : null
+      }
+
+      await this.persist()
+      this.broadcast({ event: 'player-left', data: { playerIds: this.occupiedSeats() } })
+      this.broadcast({ event: 'state', data: this.buildStatePayload('') })
+    }
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
@@ -228,6 +270,7 @@ export class RoomDurableObject extends DurableObject {
 
   private async handleGetRoom(request: Request): Promise<Response> {
     const sessionId = request.headers.get('X-Session-Id') ?? ''
+    const state = this._state!
     const playerIds = this.occupiedSeats()
     const playerPosition = this.seatBySession(sessionId)
     const playerId = playerPosition >= 0 ? playerPosition : null
@@ -238,7 +281,9 @@ export class RoomDurableObject extends DurableObject {
         playerIds,
         playerPosition,
         playerId,
-        seats: this._state!.seats,
+        seats: state.seats,
+        scores: state.scores,
+        winner: state.winner,
       }),
       { headers: { 'Content-Type': 'application/json' } },
     )
@@ -273,7 +318,8 @@ export class RoomDurableObject extends DurableObject {
     }
 
     const state = this._state!
-    if (state.stage !== 'waiting-for-players') {
+    // Allow join during waiting or paused (for rejoin after pause)
+    if (state.stage !== 'waiting-for-players' && state.stage !== 'paused') {
       return Err.badRequest('GAME_IN_PROGRESS', 'Game already in progress').toResponse()
     }
 
@@ -315,10 +361,24 @@ export class RoomDurableObject extends DurableObject {
       return Err.badRequest('NOT_A_PLAYER', 'Not a player').toResponse()
     }
 
+    // Free the seat
     state.seats[seatIndex] = null
+
+    // If game is in progress, pause it
+    if (state.stage === 'in-progress') {
+      state.stage = 'paused'
+
+      // If the leaving player was the active player, advance to next occupied seat
+      if (state.activePlayerId === seatIndex) {
+        const occupied = this.occupiedSeats() // excludes the freed seat
+        state.activePlayerId = occupied.length > 0 ? occupied[0] : null
+      }
+    }
+
     await this.persist()
 
     this.broadcast({ event: 'player-left', data: { playerIds: this.occupiedSeats() } })
+    this.broadcast({ event: 'state', data: this.buildStatePayload('') })
 
     return new Response(
       JSON.stringify({ playerIds: this.occupiedSeats() }),
@@ -344,12 +404,50 @@ export class RoomDurableObject extends DurableObject {
       return Err.badRequest('NOT_ENOUGH_PLAYERS', 'Need at least 2 players to start').toResponse()
     }
 
+    // --- Roll the initial die ---
+    const die = rollDie()
+    state.roll = die
+    state.turn = 1
+
+    // --- Create piece supply (1 copy per seated player) ---
+    const supply = createPieceSupply(playerIds.length, false)
+    // Convert 1-based supply keys to match our mapping:
+    // createPieceSupply(2) => { 1: {...}, 2: {...} } for players 1, 2.
+    // We map seat 0 → player 1, seat 1 → player 2, etc.
+    const remapped: Record<string, Record<string, number>> = {}
+    for (let i = 0; i < playerIds.length; i++) {
+      const pid = String(i + 1)
+      remapped[pid] = supply[Number(pid)] ?? { L: 5, O: 5, T: 5, I: 5, S: 5, Z: 5 }
+    }
+    state.piecesRemaining = remapped
+
+    // --- Initialize scores (flat) and scoredCells ---
+    const initialScores: Record<number, number> = {}
+    const initialScoredCells: Record<string, string[]> = {}
+    for (let i = 0; i < playerIds.length; i++) {
+      const pid = i + 1
+      initialScores[pid] = 0
+      initialScoredCells[String(pid)] = []
+    }
+    state.scores = initialScores
+    state.scoredCells = initialScoredCells
+
+    // --- Set first player (join order) ---
+    const firstPlayer = playerIds[0]!
+    state.activePlayerId = firstPlayer
     state.stage = 'in-progress'
-    state.activePlayerId = playerIds[0] ?? null
+
+    // --- First-turn S/Z penalty ---
+    // If the starting player rolls SZ on turn 1, they begin with -1.
+    const firstOwner = firstPlayer + 1
+    if (detectFirstTurnSZO(state.board, firstOwner, die)) {
+      state.scores[firstOwner] = -1
+    }
+
     await this.persist()
 
     const roomData = this.publicRoom()
-    this.broadcast({ event: 'turn-start', data: roomData })
+    this.broadcast({ event: 'state', data: this.buildStatePayload(sessionId) })
 
     return new Response(JSON.stringify(roomData), {
       headers: { 'Content-Type': 'application/json' },
@@ -364,7 +462,7 @@ export class RoomDurableObject extends DurableObject {
       rotation: number
       flip: boolean
     }
-    const { sessionId } = body
+    const { sessionId, column, shape: shapeStr, rotation, flip } = body
     if (!sessionId) {
       return Err.sessionRequired().toResponse()
     }
@@ -379,14 +477,143 @@ export class RoomDurableObject extends DurableObject {
       return Err.badRequest('GAME_NOT_IN_PROGRESS', 'Game is not in progress').toResponse()
     }
 
-    // Basic turn increment — full validation in M3-5
+    // --- Verify this player is the active player ---
+    if (seatIndex !== state.activePlayerId) {
+      return Err.badRequest('NOT_YOUR_TURN', 'It is not your turn').toResponse()
+    }
+
+    const shapeName = shapeStr as Shape
+    const owner = seatIndex + 1 // 1-based player ID for engine
+
+    // --- Validate shape against the rolled die ---
+    const legalShapes = legalShapesForDie(state.roll)
+    if (!legalShapes.includes(shapeName)) {
+      return Err.badRequest('INVALID_SHAPE', `Shape '${shapeStr}' is not allowed by the roll '${state.roll}'`).toResponse()
+    }
+
+    // --- Decrement piece supply (must have pieces) ---
+    const pSupply = state.piecesRemaining[String(owner)]
+    if (!pSupply || (pSupply[shapeName] ?? 0) <= 0) {
+      return Err.badRequest('NO_PIECES', `No '${shapeStr}' pieces remaining`).toResponse()
+    }
+
+    // --- Get the shape orientation ---
+    const shapeData = getShape({ shape: shapeName, rotation, flip })
+
+    // --- Attempt placement ---
+    const shapeId = encodeCell(owner, state.turn)
+    const placeResult = tryPlacePiece({
+      board: state.board,
+      column,
+      shape: shapeData,
+      shapeId,
+    })
+    if (!placeResult) {
+      return Err.badRequest('ILLEGAL_PLACEMENT', 'Piece cannot be placed at that column').toResponse()
+    }
+
+    // --- Place the piece ---
+    state.board = placeResult.board
+    pSupply[shapeName] -= 1
+
+    // --- Compute scoring ---
+    // Reconstruct previous PlayerScore objects from stored scores
+    const previousScores: Record<number, { score: number; scoredCells: string[] }> = {}
+    for (const [pidStr, score] of Object.entries(state.scores)) {
+      previousScores[Number(pidStr)] = {
+        score,
+        scoredCells: state.scoredCells[pidStr] ?? [],
+      }
+    }
+    const turnResult = scoreTurn(state.board, placeResult.cells, owner, previousScores)
+
+    // Update stored scores / scoredCells from result
+    for (const [pidStr, ps] of Object.entries(turnResult.scores)) {
+      const pid = Number(pidStr)
+      state.scores[pid] = ps.score
+      state.scoredCells[pidStr] = ps.scoredCells
+    }
+
+    // --- Detect game over (tower full or no player can move) ---
+    if (isGameOver(state.board, state.piecesRemaining)) {
+      state.stage = 'complete'
+      const winnerResult = getWinner(turnResult.scores, state.board)
+      if (winnerResult === TIE_BREAKER_LIMIT) {
+        state.winner = -1
+      } else {
+        state.winner = winnerResult.playerId
+      }
+
+      await this.persist()
+      this.broadcast({ event: 'state', data: this.buildStatePayload(sessionId) })
+      this.broadcast({
+        event: 'game-over',
+        data: { winner: state.winner, scores: { ...state.scores } },
+      })
+
+      return new Response(JSON.stringify(this.publicRoom()), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    // --- Advance to next occupied seat ---
+    const playerIds = this.occupiedSeats()
+    const currentIdx = playerIds.indexOf(state.activePlayerId!)
+    const nextSeatIndex = (currentIdx + 1) % playerIds.length
+    state.activePlayerId = playerIds[nextSeatIndex]
+
+    // --- Roll the die for the next player ---
+    state.roll = rollDie()
     state.turn += 1
+
+    // --- Skip-turn loop: advance past any player who cannot move ---
+    let skipGuard = 0
+    while (skipGuard < MAX_PLAYERS) {
+      const nextOwner = state.activePlayerId! + 1
+      const skipResult = trySkipTurn({
+        board: state.board,
+        piecesRemaining: state.piecesRemaining,
+        playerId: nextOwner,
+        diceValue: state.roll,
+      })
+      if (!skipResult.skipped) break
+
+      // Advance past this player and re-roll
+      const idx = playerIds.indexOf(state.activePlayerId!)
+      state.activePlayerId = playerIds[(idx + 1) % playerIds.length]
+      state.roll = rollDie()
+      skipGuard++
+    }
+
+    // If all players skipped, game is over (tower is full)
+    if (skipGuard >= MAX_PLAYERS) {
+      state.stage = 'complete'
+      const finalScores: Record<number, { score: number; scoredCells: string[] }> = {}
+      for (const [pidStr, score] of Object.entries(state.scores)) {
+        finalScores[Number(pidStr)] = {
+          score,
+          scoredCells: state.scoredCells[pidStr] ?? [],
+        }
+      }
+      const winnerResult = getWinner(finalScores, state.board)
+      if (winnerResult === TIE_BREAKER_LIMIT) {
+        state.winner = -1
+      } else {
+        state.winner = winnerResult.playerId
+      }
+    }
+
     await this.persist()
 
-    const roomData = this.publicRoom()
-    this.broadcast({ event: 'turn-start', data: roomData })
+    this.broadcast({ event: 'state', data: this.buildStatePayload(sessionId) })
+    if (state.stage === 'complete') {
+      this.broadcast({
+        event: 'game-over',
+        data: { winner: state.winner, scores: { ...state.scores } },
+      })
+    }
 
-    return new Response(JSON.stringify(roomData), {
+    return new Response(JSON.stringify(this.publicRoom()), {
       headers: { 'Content-Type': 'application/json' },
     })
   }
@@ -451,7 +678,8 @@ export class RoomDurableObject extends DurableObject {
       turn: this._state.turn,
       roll: this._state.roll,
       stage: this._state.stage,
-      scores: this._state.scores,
+      scores: { ...this._state.scores },
+      winner: this._state.winner,
       playerIds,
       playerPosition,
       playerId: playerPosition >= 0 ? playerPosition : null,

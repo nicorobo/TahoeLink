@@ -186,16 +186,17 @@ app.post('/room/:roomId/start', async (c) => {
   })
 })
 
-const ShapeSchema = z.enum(['L', 'O', 'S', 'T', 'I'])
+// All 6 playable shapes — includes Z (SZ die face allows S or Z)
+const ShapeSchema = z.enum(['L', 'O', 'S', 'T', 'I', 'Z'])
 
 app.post(
   '/room/:roomId/turn',
   zValidator(
     'json',
     z.object({
-      column: z.number(),
+      column: z.number().int().min(0).max(9),
       shape: ShapeSchema,
-      rotation: z.number(),
+      rotation: z.number().int().min(0).max(3),
       flip: z.boolean(),
     }),
   ),
