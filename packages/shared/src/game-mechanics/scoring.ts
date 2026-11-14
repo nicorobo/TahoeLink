@@ -197,3 +197,62 @@ export function scoreTurn(
 
     return { delta, scores: newScores }
 }
+
+/**
+ * Detect groups that are "blocked" — fully surrounded by opponent pieces, the board
+ * edge, or a combination such that no further link can be made.
+ *
+ * A group is blocked when **no cell** in the group has an orthogonally adjacent empty
+ * cell within the board. This means the group cannot be extended in any direction.
+ *
+ * Returns a record mapping owner ID to an array of blocked groups, where each group
+ * is a Set of "x,y" coordinate keys.
+ *
+ * @param board - The current board state (column-major).
+ * @returns Record of owner → blocked groups. Empty record if no groups are blocked.
+ */
+export function getBlockedGroups(board: Board): Record<number, Array<Set<string>>> {
+    const groupsByOwner = findGroups(board)
+    const blocked: Record<number, Array<Set<string>>> = {}
+
+    for (const [owner, groups] of groupsByOwner) {
+        for (const group of groups) {
+            let blockedGroup = true
+
+            for (const key of group) {
+                const [xStr, yStr] = key.split(',')
+                const x = parseInt(xStr, 10)
+                const y = parseInt(yStr, 10)
+
+                // Check all 4 orthogonal directions
+                const neighbors: Array<[number, number]> = [
+                    [x - 1, y],
+                    [x + 1, y],
+                    [x, y - 1],
+                    [x, y + 1],
+                ]
+
+                for (const [nx, ny] of neighbors) {
+                    if (nx < 0 || nx >= BOARD_WIDTH || ny < 0 || ny >= BOARD_HEIGHT) {
+                        continue // board edge is not an empty cell
+                    }
+                    if (board[nx]![ny]! < 0) {
+                        // Found an empty neighbor — group is not blocked
+                        blockedGroup = false
+                        break
+                    }
+                }
+
+                if (!blockedGroup) break
+            }
+
+            if (blockedGroup) {
+                const existing = blocked[owner] ?? []
+                existing.push(group)
+                blocked[owner] = existing
+            }
+        }
+    }
+
+    return blocked
+}

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { BOARD_HEIGHT, BOARD_WIDTH } from "../constants"
 import { getDefaultBoard } from "./board"
-import { scoreBoard, scoreTurn } from "./scoring"
+import { scoreBoard, scoreTurn, getBlockedGroups } from "./scoring"
 import type { Board } from "../types"
 import { encodeCell } from "./cell"
 import type { PlayerScore } from "./scoring"
@@ -567,5 +567,179 @@ describe("scoreTurn", () => {
         // No gap: (1,9) at floor
         expect(result.delta).toBe(1)
         expect(result.scores[1]!.score).toBe(7)
+    })
+})
+
+describe("getBlockedGroups", () => {
+    test("empty board: no groups, no blocked groups", () => {
+        const board = getDefaultBoard()
+        const blocked = getBlockedGroups(board)
+        expect(blocked).toEqual({})
+    })
+
+    test("single cell group not blocked (has empty neighbors)", () => {
+        const board = getDefaultBoard()
+        board[0]![9] = encodeCell(1, 1)
+        const blocked = getBlockedGroups(board)
+        // Single cell group has empty neighbors (below floor already, but above/left/right are empty)
+        expect(blocked).toEqual({})
+    })
+
+    test("group surrounded by opponents → blocked", () => {
+        const board = getDefaultBoard()
+        // Player 1 at (1,1)
+        board[1]![1] = encodeCell(1, 1)
+        // Surround with player 2
+        board[0]![1] = encodeCell(2, 1)
+        board[2]![1] = encodeCell(2, 1)
+        board[1]![0] = encodeCell(2, 1)
+        board[1]![2] = encodeCell(2, 1)
+        // Player 1's cell at (1,1) has no empty orthogonally adjacent cell
+        const blocked = getBlockedGroups(board)
+        expect(blocked[1]).toBeDefined()
+        expect(blocked[1]!.length).toBe(1)
+        // The group should contain (1,1)
+        const group = blocked[1]![0]!
+        expect(group.has("1,1")).toBe(true)
+        expect(group.size).toBe(1)
+    })
+
+    test("group against board edge + opponent on other side → blocked", () => {
+        const board = getDefaultBoard()
+        // Player 1 at (0,9) — corner: top edge, right edge, bottom edge, left edge all bound or occupied
+        board[0]![9] = encodeCell(1, 1)
+        // Block the only open side (up)
+        board[0]![8] = encodeCell(2, 1)
+        // (0,9) has: bottom=boundary, left=boundary, right=(1,9)=empty, top=(0,8)=occupied
+        // Right is empty → not blocked yet
+        // Let's also block right
+        board[1]![9] = encodeCell(2, 1)
+        // Now all four sides: bottom=boundary, left=boundary, right=occupied, top=occupied → blocked
+        const blocked = getBlockedGroups(board)
+        expect(blocked[1]).toBeDefined()
+        expect(blocked[1]!.length).toBe(1)
+    })
+
+    test("large group not blocked when one cell has empty neighbor", () => {
+        const board = getDefaultBoard()
+        // Player 1: group of 3 cells (0,7),(0,8),(0,9)
+        board[0]![7] = encodeCell(1, 1)
+        board[0]![8] = encodeCell(1, 1)
+        board[0]![9] = encodeCell(1, 1)
+        // Block top and right sides
+        board[1]![7] = encodeCell(2, 1)
+        board[1]![8] = encodeCell(2, 1)
+        board[1]![9] = encodeCell(2, 1)
+        // (0,7) has empty left neighbor (col -1 = boundary), empty top (0,6)
+        // Since (0,6) is empty, the group is NOT blocked
+        const blocked = getBlockedGroups(board)
+        expect(blocked).toEqual({})
+    })
+
+    test("two separate blocked groups for two players", () => {
+        const board = getDefaultBoard()
+        // Player 1 cell at (2,2) surrounded
+        board[2]![2] = encodeCell(1, 1)
+        board[1]![2] = encodeCell(2, 1)
+        board[3]![2] = encodeCell(2, 1)
+        board[2]![1] = encodeCell(2, 1)
+        board[2]![3] = encodeCell(2, 1)
+
+        // Player 2 cell at (7,7) surrounded
+        board[7]![7] = encodeCell(2, 1)
+        board[6]![7] = encodeCell(1, 1)
+        board[8]![7] = encodeCell(1, 1)
+        board[7]![6] = encodeCell(1, 1)
+        board[7]![8] = encodeCell(1, 1)
+
+        const blocked = getBlockedGroups(board)
+        // Player 1 has a blocked group
+        expect(blocked[1]).toBeDefined()
+        expect(blocked[1]!.length).toBe(1)
+        expect(blocked[1]![0]!.has("2,2")).toBe(true)
+
+        // Player 2 has a blocked group at (7,7)
+        expect(blocked[2]).toBeDefined()
+        expect(blocked[2]!.length).toBe(1)
+        expect(blocked[2]![0]!.has("7,7")).toBe(true)
+    })
+
+    test("mix of blocked and unblocked groups for same player", () => {
+        const board = getDefaultBoard()
+        // Player 1: group of 3 at (0,7),(0,8),(0,9) — NOT blocked (open left, top)
+        board[0]![7] = encodeCell(1, 1)
+        board[0]![8] = encodeCell(1, 1)
+        board[0]![9] = encodeCell(1, 1)
+
+        // Player 1: cell at (5,5) — fully surrounded → blocked
+        board[5]![5] = encodeCell(1, 1)
+        board[4]![5] = encodeCell(2, 1)
+        board[6]![5] = encodeCell(2, 1)
+        board[5]![4] = encodeCell(2, 1)
+        board[5]![6] = encodeCell(2, 1)
+
+        const blocked = getBlockedGroups(board)
+        // There should be exactly 1 blocked group for player 1 (the surrounded cell at (5,5))
+        expect(blocked[1]).toBeDefined()
+        expect(blocked[1]!.length).toBe(1)
+        expect(blocked[1]![0]!.has("5,5")).toBe(true)
+        expect(blocked[1]![0]!.has("0,7")).toBe(false)
+    })
+
+    test("blocked group still detected when touching board edge", () => {
+        const board = getDefaultBoard()
+        // Player 1 cell at (9,9) — bottom-right corner
+        board[9]![9] = encodeCell(1, 1)
+        // Block the interior sides
+        board[8]![9] = encodeCell(2, 1)  // left
+        board[9]![8] = encodeCell(2, 1)  // top
+        // All sides: bottom=boundary, right=boundary, left=occupied, top=occupied → blocked
+        const blocked = getBlockedGroups(board)
+        expect(blocked[1]).toBeDefined()
+        expect(blocked[1]!.length).toBe(1)
+        expect(blocked[1]![0]!.has("9,9")).toBe(true)
+    })
+
+    test("group with only empty space on the floor (row 9) → not blocked", () => {
+        const board = getDefaultBoard()
+        // Group at row 9 — floor is below, but cell has empty above and sides available
+        board[0]![9] = encodeCell(1, 1)
+        board[1]![9] = encodeCell(1, 1)
+        board[2]![9] = encodeCell(1, 1)
+        // Neighbors: right of (2,9)=(3,9) empty -> not blocked
+        const blocked = getBlockedGroups(board)
+        expect(blocked).toEqual({})
+    })
+
+    test("group with multi-cell blocked group (surrounded entirely)", () => {
+        const board = getDefaultBoard()
+        // Player 1: 2×2 block at (1,1),(1,2),(2,1),(2,2)
+        board[1]![1] = encodeCell(1, 1)
+        board[1]![2] = encodeCell(1, 1)
+        board[2]![1] = encodeCell(1, 1)
+        board[2]![2] = encodeCell(1, 1)
+        // Surround entirely with player 2 cells
+        // Top
+        board[1]![0] = encodeCell(2, 1)
+        board[2]![0] = encodeCell(2, 1)
+        // Bottom
+        board[1]![3] = encodeCell(2, 1)
+        board[2]![3] = encodeCell(2, 1)
+        // Left
+        board[0]![1] = encodeCell(2, 1)
+        board[0]![2] = encodeCell(2, 1)
+        // Right
+        board[3]![1] = encodeCell(2, 1)
+        board[3]![2] = encodeCell(2, 1)
+
+        const blocked = getBlockedGroups(board)
+        expect(blocked[1]).toBeDefined()
+        expect(blocked[1]!.length).toBe(1)
+        const group = blocked[1]![0]!
+        expect(group.has("1,1")).toBe(true)
+        expect(group.has("1,2")).toBe(true)
+        expect(group.has("2,1")).toBe(true)
+        expect(group.has("2,2")).toBe(true)
+        expect(group.size).toBe(4)
     })
 })

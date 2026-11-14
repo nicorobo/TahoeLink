@@ -1,8 +1,9 @@
-import type { Board, Shape } from "../types"
+import type { Board, DiceValue, Shape } from "../types"
 import { shapes } from "./shapes"
 import { getLegalColumns } from "./board"
 import { findGroups } from "./scoring"
-import { TIE_BREAKER_LIMIT } from "../constants"
+import { legalShapesForDie } from "./dice"
+import { BOARD_WIDTH, BOARD_HEIGHT, TIE_BREAKER_LIMIT } from "../constants"
 import type { PlayerScore } from "./scoring"
 
 /**
@@ -179,4 +180,103 @@ export function getWinner(
         playerId: bestPlayer,
         tieBrokenBy: 'largest connected component',
     }
+}
+
+/**
+ * Result of a skip-turn check.
+ */
+export interface SkipTurnResult {
+    skipped: boolean
+    /** Human-readable reason when skipped, e.g. "no pieces remaining" or "cannot fit". */
+    reason?: string
+}
+
+/**
+ * Check whether the given player must skip their turn.
+ *
+ * A turn is skipped when:
+ * - No piece of the rolled shape(s) remains in the player's supply, OR
+ * - The rolled shape(s) cannot fit entirely in the tower in any orientation.
+ *
+ * For `SZ`, both S and Z are checked; if either can be played, the turn is not skipped.
+ * For `any`, all 6 shapes are checked; if any can be played, the turn is not skipped.
+ *
+ * @returns `{ skipped: true, reason: "..." }` if the turn should be skipped.
+ */
+export function trySkipTurn({
+    board,
+    piecesRemaining,
+    playerId,
+    diceValue,
+}: {
+    board: Board
+    piecesRemaining: PieceSupply
+    playerId: number
+    diceValue: DiceValue
+}): SkipTurnResult {
+    const shapesForDie = legalShapesForDie(diceValue)
+    const pSupply = piecesRemaining[playerId]
+    if (!pSupply) {
+        return { skipped: true, reason: 'no pieces remaining' }
+    }
+
+    let anyHasPieces = false
+    let anyCanFit = false
+
+    for (const shapeName of shapesForDie) {
+        const remaining = pSupply[shapeName] ?? 0
+        if (remaining <= 0) continue
+        anyHasPieces = true
+
+        // Check if this shape can fit in any orientation
+        const shapeData = shapes[shapeName]
+        for (const rotationGroup of shapeData) {
+            for (const orientation of rotationGroup) {
+                const cols = getLegalColumns(board, orientation as unknown as number[][])
+                if (cols.length > 0) {
+                    anyCanFit = true
+                    break
+                }
+            }
+            if (anyCanFit) break
+        }
+        if (anyCanFit) break
+    }
+
+    if (!anyHasPieces) {
+        return { skipped: true, reason: 'no pieces remaining' }
+    }
+    if (!anyCanFit) {
+        return { skipped: true, reason: 'shape cannot fit' }
+    }
+
+    return { skipped: false }
+}
+
+/**
+ * Detect whether the starting player has rolled S/Z on the first turn.
+ *
+ * If the board is completely empty (no cells placed by any player yet) and the
+ * dice rolled is `'SZ'`, this returns `true` — the starting player must take the
+ * empty-space penalty on their first turn, potentially starting with a negative score.
+ *
+ * @param board - The current board state.
+ * @param _playerId - Ignored (result is game-level, not per-player).
+ * @param diceValue - The rolled dice face.
+ * @returns True if this is the first turn of the game and the roll is SZ.
+ */
+export function detectFirstTurnSZO(
+    board: Board,
+    _playerId: number,
+    diceValue: DiceValue,
+): boolean {
+    if (diceValue !== 'SZ') return false
+
+    // Check if the board is completely empty (first turn of the game)
+    for (let x = 0; x < BOARD_WIDTH; x++) {
+        for (let y = 0; y < BOARD_HEIGHT; y++) {
+            if (board[x]![y]! >= 0) return false
+        }
+    }
+    return true
 }

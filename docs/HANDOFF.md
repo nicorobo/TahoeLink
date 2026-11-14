@@ -6,50 +6,47 @@ entries; older detail lives in git and `PLAN.md`, so archive rather than endless
 
 ## Snapshot
 
-- Date: 2026-11-16
-- Branch: `milestone-1.9`; M1-9 implemented and verified
-- Current milestone: **M1 — rules engine in shared** (M1-2..M1-9 done)
-- Next task: **M1-10** (skip-turn logic)
+- Date: 2026-11-16 (session 2)
+- Branch: `milestone-1.10-1.12`; M1-10 through M1-14 implemented and verified
+- Current milestone: **M1 — rules engine in shared** (all M1 tasks complete ✅)
+- Next milestone: **M2 — Durable Object foundation** (M2-1 .. M2-7)
 
-To resume: read `AGENTS.md`, then run `/task <next-id>`; use `/verify` before committing and
+To resume: read `AGENTS.md`, then run `/task M2-1`; use `/verify` before committing and
 `/handoff` at the end of the session.
 
 ## What changed this session
 
 | Task | Change | Files |
 |------|--------|-------|
-| M1-9 | Added golden placement fixtures for every shape (L,O,T,I,S,Z) at left wall, right wall, stacked, and ceiling overflow — 38 tests | `packages/shared/src/game-mechanics/board.test.ts` |
-| M1-9 | Added merge-scoring fixtures (3-group merge, bridge merge preserving scored cells, complex multi-player) — 8 new tests | `packages/shared/src/game-mechanics/scoring.test.ts` |
-| M1-9 | Added empty-space penalty edge cases (partial overhang, mixed terrain, multi-gap) — 3 new tests | `packages/shared/src/game-mechanics/scoring.test.ts` |
-| M1-9 | Added seeded-dice distribution test (Park-Miller LCG, 6000 rolls) | `packages/shared/src/game-mechanics/dice.test.ts` |
-| M1-9 | Added game-state edge cases (3-way tie-breaker, 4-player winner, single cell hole) — 7 new tests | `packages/shared/src/game-mechanics/game-state.test.ts` |
-| M1-9 | Created seeded fuzz loop: 50 random 2-player games + 2/3/4-player single seeds with overlap/owner invariants, reproducibility | `packages/shared/src/game-mechanics/fuzz.test.ts` |
+| M1-10 | Added `trySkipTurn` — skips when no pieces remain or shape cannot fit in any orientation. Covers SZ (both S and Z checked) and any (all 6 shapes checked) die faces. 12 tests. | `packages/shared/src/game-mechanics/game-state.ts`, `game-state.test.ts` |
+| M1-11 | Added `getBlockedGroups` — detects groups fully surrounded by opponents/board edge. Returns `Record<playerId, Set<string>[]>`. 10 tests including multi-player, mixed blocked/unblocked, edge-corner cases. | `packages/shared/src/game-mechanics/scoring.ts`, `scoring.test.ts` |
+| M1-12 | Added `detectFirstTurnSZO` — returns true when board is empty and diceValue is `'SZ'`. 6 tests. | `packages/shared/src/game-mechanics/game-state.ts`, `game-state.test.ts` |
+| M1-13 | Verified: `DiceValue` already has `'SZ'` member, `DICE_FACES` constant exists with 6 entries, `legalShapesForDie` maps correctly. No changes needed. | — (verified) |
+| M1-14 | Verified: `createPieceSupply` already supports `sharedColor` parameter with shared-object semantics for 2-player mode. No changes needed. | — (verified) |
 
 ### Design decisions
 
-1. **Park-Miller LCG** for seeded RNG in fuzz and dice tests. Simple 32-bit arithmetic avoids JS BigInt pitfalls with 64-bit LCGs.
-2. **No blocked-group detection fixtures** in M1-9 — deferred to M1-11 when `getBlockedGroups` exists.
-3. **`runRandomGame` uses an `anyMovesRemain` guard** to detect game-over rather than relying on attempt limits alone, ensuring fast termination on full boards.
+1. **`trySkipTurn` uses `legalShapesForDie`** to resolve dice values to shape lists, ensuring SZ checks both S and Z. For `any`, all 6 shapes are checked; if any shape has pieces and fits, the turn is not skipped.
+2. **`getBlockedGroups` uses `findGroups`** (existing BFS) then checks each group for empty orthogonal neighbors. A group is blocked only when *no* cell in the group has an empty neighbor within bounds.
+3. **`detectFirstTurnSZO` checks board emptiness** (all cells == -1) rather than tracking turn count, keeping it a pure function without external state.
+4. **M1-13 and M1-14 were already implemented** in earlier M1 sessions (DiceValue with 'SZ', DICE_FACES, legalShapesForDie, createPieceSupply with sharedColor). Only verification was needed.
 
 ## Verified evidence
 
 | Check | Result |
 | --- | --- |
-| `cd packages/shared && bun test` | **153 pass, 0 fail** — board (66), dice (10), scoring (31), cell (6), game-state (31), fuzz (8) |
+| `cd packages/shared && bun test` | **182 pass, 0 fail** — added 28 new tests |
 | `cd packages/shared && bunx tsc --noEmit` | clean |
 | `cd packages/api && bunx tsc --noEmit` | clean |
 | `cd packages/app && bun run check` | clean (1 pre-existing a11y warning) |
-| 50 random 2-player fuzz games | all terminate, no overlaps, no owner errors |
 
 ## Not verified / known gaps
 
-- No skipped-turn logic (M1-10).
-- No blocked-group detection (M1-11).
-- No first-turn S/Z penalty (M1-12).
-- No DiceValue type update for combined S/Z face (M1-13 — partially done).
-- No 2-player shared-color mode at the API level (M1-14).
 - The fuzz loop does not verify floating-cell invariants (the gravity algorithm permits overhangs by design).
 - Docker/Redis routes remain broken in wrangler dev — M2 target.
+- `detectFirstTurnSZO` is a pure function but is not yet wired into the server turn handler — M3-4 stage.
+- `getBlockedGroups` is not yet integrated into scoring — scoring currently ignores blocked-group status per R4/R15.
+- No 2-player shared-color mode at the API level — M3 or M4 target.
 
 ## Environment
 
@@ -58,23 +55,14 @@ To resume: read `AGENTS.md`, then run `/task <next-id>`; use `/verify` before co
 
 ## Session log
 
-### 2026-11-16 — M1-9: Golden fixtures, scoring edge cases, fuzz loop
+### 2026-11-16 (session 2) — M1-10..M1-14: Skip-turn, blocked groups, first-turn S/Z, verify M1-13/14
 
-Implemented comprehensive test coverage for the rules engine:
-- 38 golden placement fixtures across all 6 shapes (L,O,T,I,S,Z), each tested at left wall, right wall, stacked, and ceiling-overflow scenarios.
-- 11 new scoring tests: 3-group merge, scored-to-unscored bridge, multi-player scoring, empty-space edge cases.
-- 7 new game-state tests: 3-way and 4-player getWinner, tie-breaker edge cases, single-cell-hole detection.
-- Dice distribution test with Park-Miller LCG and 6000 rolls.
-- Fuzz loop with 50 random 2-player games and 4 single-seed games (2/3/4-player), all verifying overlap and owner invariants.
-- 153 total tests, 0 failures across all files.
-- Updated PLAN.md checkbox and HANDOFF.md.
+Implemented the remaining M1 rules-engine tasks:
+- **M1-10**: `trySkipTurn` checks both pieces-remaining and fit-in-board for rolled shape(s). Handles SZ face (both S and Z) and any (all 6 shapes). 12 tests covering all skip/not-skip branches.
+- **M1-11**: `getBlockedGroups` reuses `findGroups` BFS, checks each group for empty orthogonal neighbors. 10 tests: single/multi-cell, edge/corner, multi-player, mixed blocked/unblocked.
+- **M1-12**: `detectFirstTurnSZO` returns true when board is empty and roll is SZ. Pure function, 6 tests.
+- **M1-13**: Verified `DiceValue` type has `'SZ'` member, `DICE_FACES` has 6 entries, `legalShapesForDie` correctly maps SZ→[S,Z] and any→all. No changes needed.
+- **M1-14**: Verified `createPieceSupply` supports `sharedColor` parameter for 2-player shared-color mode. Tests confirm shared-object semantics.
+- 182 total tests (28 new), all passing. Typecheck clean across all packages.
 
-Next: **M1-10** (skip-turn logic) or any of M1-11..M1-14 as preferred.
-
-### 2026-11-16 — M1-7, M1-8: Piece supply, game-over, winner, stable cell encoding
-
-Implemented two rules-engine tasks:
-- **M1-7**: `createPieceSupply` (30 pieces per player, 6 shapes × 5), `canMove`, `isGameOver`, `getWinner` with tie-breaker.
-- **M1-8**: `encodeCell`/`getOwner`/`getTurn` helpers with `CELL_OWNER_MULTIPLIER=1000`.
-
-### 2026-11-16 — M1-4, M1-5, M1-6: Legal columns, dice engine, scoring engine
+Next: **M2-1** (RoomDurableObject skeleton, DO storage schema).

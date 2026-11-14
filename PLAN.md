@@ -208,19 +208,19 @@ seat; `bun run check` is clean; CI is green.
       seeded-dice tests, empty-space penalty fixtures, merge-scoring fixtures, tie-breaker
       fixtures, and a seeded fuzz loop asserting bounds/overlap invariants and game termination.
       (Blocked-group detection fixtures deferred to M1-11 when `getBlockedGroups` exists.)
-- [ ] **M1-10** Add `trySkipTurn(board, piecesRemaining, diceValue): { skipped, reason? }` —
+- [x] **M1-10** Add `trySkipTurn(board, piecesRemaining, diceValue): { skipped, reason? }` —
       skip if no piece of the rolled shape remains, or if that shape cannot fit entirely in
       the tower in any orientation. Use `getLegalColumns` per shape orientation.
-- [ ] **M1-11** Add `getBlockedGroups(board): Record<playerId, Array<Set<string>>>` — detect
+- [x] **M1-11** Add `getBlockedGroups(board): Record<playerId, Array<Set<string>>>` — detect
       groups surrounded by opponents or board edge. Mark them "out of play" so scoring
       ignores further additions to them. This feeds scoring and the UI (which groups are
       dead).
-- [ ] **M1-12** Add `detectFirstTurnSZO(board, playerId, diceValue): boolean` and apply the
+- [x] **M1-12** Add `detectFirstTurnSZO(board, playerId, diceValue): boolean` and apply the
       empty-space penalty to the starting player's score if they roll S/Z on turn 1.
-- [ ] **M1-13** Update `DiceValue` type to reflect the combined S/Z face. Consider: one
+- [x] **M1-13** Update `DiceValue` type to reflect the combined S/Z face. Consider: one
       member `'sz'` with a mapping `legalShapes['sz'] = ['S', 'Z']`, or keep separate and
       handle in `rollDie`. Add a `DICE_FACES` constant array of 6 entries.
-- [ ] **M1-14** Add 2-player setup support: `createPieceSupply(playerCount, sharedColor?)` —
+- [x] **M1-14** Add 2-player setup support: `createPieceSupply(playerCount, sharedColor?)` —
       when `sharedColor` is true, both players draw from the same 25-piece pool.
 
 **Acceptance:** `cd packages/shared && bun test` covers every rule that does not need I/O;

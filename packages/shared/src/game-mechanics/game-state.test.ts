@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { getDefaultBoard } from "./board"
-import { createPieceSupply, canMove, isGameOver, getWinner } from "./game-state"
+import { createPieceSupply, canMove, isGameOver, getWinner, trySkipTurn, detectFirstTurnSZO } from "./game-state"
 import { encodeCell } from "./cell"
 import { TIE_BREAKER_LIMIT, BOARD_HEIGHT, BOARD_WIDTH } from "../constants"
-import type { Board } from "../types"
+import type { Board, DiceValue } from "../types"
 import type { PlayerScore } from "./scoring"
 
 /** Helper: create a PlayerScore for testing. */
@@ -376,5 +376,211 @@ describe("getWinner", () => {
         expect(supply[1]).toBe(supply[2]) // Same object
         supply[1]!['L']!--
         expect(supply[2]!['L']).toBe(4) // Shared, so player 2 also lost one
+    })
+})
+
+describe("trySkipTurn", () => {
+    test("no pieces remaining of rolled shape → skip", () => {
+        const board = getDefaultBoard()
+        const supply = createPieceSupply(2)
+        supply[1]!['L'] = 0  // player 1 has no L pieces
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'L' })
+        expect(result.skipped).toBe(true)
+        expect(result.reason).toContain('no pieces')
+    })
+
+    test("shape cannot fit anywhere → skip", () => {
+        // Fill the entire board so no shape fits
+        const board = getDefaultBoard()
+        for (let x = 0; x < BOARD_WIDTH; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                board[x]![y] = encodeCell(1, 1)
+            }
+        }
+        const supply = createPieceSupply(2)
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'I' })
+        expect(result.skipped).toBe(true)
+        expect(result.reason).toContain('cannot fit')
+    })
+
+    test("player has pieces and shape fits → not skipped", () => {
+        const board = getDefaultBoard()
+        const supply = createPieceSupply(2)
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'L' })
+        expect(result.skipped).toBe(false)
+        expect(result.reason).toBeUndefined()
+    })
+
+    test("SZ die face: player has S pieces, S fits → not skipped", () => {
+        const board = getDefaultBoard()
+        const supply = createPieceSupply(2)
+        supply[1]!['Z'] = 0  // no Z pieces
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'SZ' })
+        expect(result.skipped).toBe(false)
+    })
+
+    test("SZ die face: player has no S or Z pieces → skip", () => {
+        const board = getDefaultBoard()
+        const supply = createPieceSupply(2)
+        supply[1]!['S'] = 0
+        supply[1]!['Z'] = 0
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'SZ' })
+        expect(result.skipped).toBe(true)
+        expect(result.reason).toContain('no pieces')
+    })
+
+    test("SZ die face: player has pieces but neither S nor Z can fit → skip", () => {
+        // Fill board so only a 1-cell gap remains (too small for S or Z)
+        const board = getDefaultBoard()
+        for (let x = 0; x < BOARD_WIDTH; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                board[x]![y] = encodeCell(1, 1)
+            }
+        }
+        board[0]![9] = -1  // one gap — can't fit any 2+ cell shape
+        const supply = createPieceSupply(2)
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'SZ' })
+        expect(result.skipped).toBe(true)
+        expect(result.reason).toContain('cannot fit')
+    })
+
+    test("any die face: player has at least one shape that fits → not skipped", () => {
+        const board = getDefaultBoard()
+        const supply = createPieceSupply(2)
+        // Remove all pieces except one I
+        for (const shape of ['L', 'O', 'T', 'S', 'Z'] as const) {
+            supply[1]![shape] = 0
+        }
+        // I can fit on empty board
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'any' })
+        expect(result.skipped).toBe(false)
+    })
+
+    test("any die face: no pieces of any shape remain → skip", () => {
+        const board = getDefaultBoard()
+        const supply = createPieceSupply(2)
+        for (const shape of ['L', 'O', 'T', 'I', 'S', 'Z'] as const) {
+            supply[1]![shape] = 0
+        }
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'any' })
+        expect(result.skipped).toBe(true)
+        expect(result.reason).toContain('no pieces')
+    })
+
+    test("any die face: no shape can fit → skip", () => {
+        const board = getDefaultBoard()
+        for (let x = 0; x < BOARD_WIDTH; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                board[x]![y] = encodeCell(1, 1)
+            }
+        }
+        const supply = createPieceSupply(2)
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'any' })
+        expect(result.skipped).toBe(true)
+        expect(result.reason).toContain('cannot fit')
+    })
+
+    test("single-cell gap on full board can't fit any shape → skip for I", () => {
+        const board = getDefaultBoard()
+        for (let x = 0; x < BOARD_WIDTH; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                board[x]![y] = encodeCell(1, 1)
+            }
+        }
+        board[0]![9] = -1  // one empty cell
+        const supply = createPieceSupply(2)
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'I' })
+        expect(result.skipped).toBe(true)
+    })
+
+    test("player 2 has pieces, player 1 has none → skip only for player 1", () => {
+        const board = getDefaultBoard()
+        const supply = createPieceSupply(2)
+        for (const shape of ['L', 'O', 'T', 'I', 'S', 'Z'] as const) {
+            supply[1]![shape] = 0  // player 1 out
+        }
+        const resultP1 = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'L' })
+        expect(resultP1.skipped).toBe(true)
+
+        const resultP2 = trySkipTurn({ board, piecesRemaining: supply, playerId: 2, diceValue: 'L' })
+        expect(resultP2.skipped).toBe(false)
+    })
+
+    test("O shape fits at column 8 when cols 0-3 are full but other columns empty", () => {
+        // Fill only cols 0-3 completely
+        const board = getDefaultBoard()
+        for (let x = 0; x < 4; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                board[x]![y] = encodeCell(1, 1)
+            }
+        }
+        const supply = createPieceSupply(2)
+        // O can still fit in cols 4-8 (needs 2 adjacent columns with space)
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'O' })
+        expect(result.skipped).toBe(false)
+    })
+
+    test("O shape cannot fit when only isolated single columns remain", () => {
+        // Fill board but leave scattered single empty columns — O needs 2 adjacent
+        const board = getDefaultBoard()
+        for (let x = 0; x < BOARD_WIDTH; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                board[x]![y] = encodeCell(1, 1)
+            }
+        }
+        // Leave only columns 0 and 9 completely empty — they're isolated and O needs 2 consecutive
+        // Actually O is 2 columns wide, so it needs cols 0-1 or 8-9.
+        // If we empty cols 0 and 9 fully, O can't fit (needs 0-1 together or 8-9 together)
+        for (let y = 0; y < BOARD_HEIGHT; y++) {
+            board[0]![y] = -1
+            board[9]![y] = -1
+        }
+        const supply = createPieceSupply(2)
+        const result = trySkipTurn({ board, piecesRemaining: supply, playerId: 1, diceValue: 'O' })
+        expect(result.skipped).toBe(true)
+    })
+})
+
+describe("detectFirstTurnSZO", () => {
+    test("empty board + SZ roll → true", () => {
+        const board = getDefaultBoard()
+        expect(detectFirstTurnSZO(board, 1, 'SZ')).toBe(true)
+    })
+
+    test("empty board + non-SZ roll → false", () => {
+        const board = getDefaultBoard()
+        for (const face of ['I', 'O', 'T', 'L', 'any'] as DiceValue[]) {
+            expect(detectFirstTurnSZO(board, 1, face)).toBe(false)
+        }
+    })
+
+    test("non-empty board + SZ roll → false (not the first turn)", () => {
+        const board = getDefaultBoard()
+        board[0]![9] = encodeCell(1, 1)  // one cell placed
+        expect(detectFirstTurnSZO(board, 1, 'SZ')).toBe(false)
+    })
+
+    test("non-empty board + non-SZ roll → false", () => {
+        const board = getDefaultBoard()
+        board[0]![9] = encodeCell(1, 1)
+        expect(detectFirstTurnSZO(board, 1, 'I')).toBe(false)
+    })
+
+    test("playerId does not affect result (game-level detection)", () => {
+        const board = getDefaultBoard()
+        // Any player on an empty board with SZ detects first-turn penalty
+        expect(detectFirstTurnSZO(board, 2, 'SZ')).toBe(true)
+        expect(detectFirstTurnSZO(board, 3, 'SZ')).toBe(true)
+    })
+
+    test("completely empty board with no cells placed yet", () => {
+        const board = getDefaultBoard()
+        // Verify all cells are -1
+        for (let x = 0; x < BOARD_WIDTH; x++) {
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                expect(board[x]![y]).toBe(-1)
+            }
+        }
+        expect(detectFirstTurnSZO(board, 1, 'SZ')).toBe(true)
     })
 })
