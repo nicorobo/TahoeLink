@@ -186,11 +186,45 @@ describe("Room DO lifecycle", () => {
     expect(body).not.toBeNull()
   })
 
-  it("GET unknown room returns 200 (new room auto-created)", async () => {
-    // DOs auto-create when accessed, so this won't 404 by design
-    const { res } = await req(`/room/unknown123`, { cookie: c1 })
-    // Currently the DO returns a valid response for any id
-    expect(res.status).toBe(200)
+  it("GET unknown room returns 404 with standardized error", async () => {
+    const { res, body } = await req(`/room/unknown123`, { cookie: c1 })
+    expect(res.status).toBe(404)
+    expect(body).toHaveProperty("error")
+    expect(body.error).toHaveProperty("code")
+    expect(body.error.code).toBe("NOT_FOUND")
+    expect(body.error).toHaveProperty("message")
+  })
+
+  it("POST /room/:id/join on unknown room returns 404", async () => {
+    const { res, body } = await req(`/room/unknown123/join`, {
+      method: "POST",
+      cookie: c1,
+      body: {},
+    })
+    expect(res.status).toBe(404)
+    expect(body.error.code).toBe("NOT_FOUND")
+  })
+
+  // -----------------------------------------------------------------------
+  // Error format
+  // -----------------------------------------------------------------------
+  it("All errors use { error: { code, message } } format", async () => {
+    // Unknown room
+    const { body } = await req(`/room/unknown456`, { cookie: c1 })
+    expect(body).toEqual({
+      error: { code: "NOT_FOUND", message: expect.any(String) },
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // Room ID format
+  // -----------------------------------------------------------------------
+  it("Room ID is 8-character Crockford base32", () => {
+    // Room IDs are generated in create-room; verify the format
+    expect(roomId.length).toBe(8)
+    expect(roomId).toMatch(/^[0-9A-Z]+$/)
+    // Should not contain ambiguous Crockford chars (I, L, O, U)
+    expect(roomId).not.toMatch(/[ILOU]/)
   })
 
   // -----------------------------------------------------------------------

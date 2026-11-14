@@ -4,6 +4,8 @@ import { logger } from 'hono/logger'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { sessionId } from './middleware/sessionId'
+import { HTTPException } from './lib/http-error'
+import { generateRoomId } from './lib/room-id'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,6 +31,33 @@ app.use(cors())
 app.use(sessionId)
 app.use(logger())
 
+/**
+ * Hono onError handler — catches thrown HTTPExceptions and unexpected errors.
+ * Never leaks stack traces in production.
+ */
+app.onError((err, c) => {
+  if (err instanceof HTTPException) {
+    // Use raw Response to avoid Hono's typed-status restriction
+    return new Response(JSON.stringify(err.toBody()), {
+      status: err.status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  // Unexpected error — log and return a generic message
+  console.error('Unhandled error:', err)
+  const isProduction = process.env.NODE_ENV === 'production'
+  return c.json(
+    {
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: isProduction ? 'Internal server error' : `Internal error: ${err.message}`,
+      },
+    },
+    500,
+  )
+})
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -38,7 +67,10 @@ function roomStub(env: Env['Bindings'], roomId: string): DurableObjectStub {
   return env.ROOMS.get(id)
 }
 
-/** Forward request to DO, return JSON response. */
+/**
+ * Forward a request to a Durable Object endpoint and return a JSON Response
+ * with the same status code and content-type. Used by all DO-proxying routes.
+ */
 async function doFetch(
   stub: DurableObjectStub,
   url: string,
@@ -69,11 +101,38 @@ app.get('/health', (c) => {
 // ---- Room lifecycle -------------------------------------------------------
 
 app.post('/create-room', async (c) => {
-  const roomId = Math.random().toString(36).substring(2, 15)
-  const stub = roomStub(c.env, roomId)
-  await stub.fetch('http://do/init', { method: 'POST' })
-  console.log(`Room ${roomId} created by ${c.get('sessionId')}`)
-  return c.json({ roomId })
+  // Generate a crypto-random room ID and attempt to initialize the DO.
+  // Retry on collision (the DO returns 409 if the ID is already taken).
+  const MAX_ATTEMPTS = 5
+
+  for (let attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
+    const roomId = generateRoomId()
+    const stub = roomStub(c.env, roomId)
+    const res = await stub.fetch('http://do/init', { method: 'POST' })
+
+    if (res.status === 200) {
+      console.log(`Room ${roomId} created by ${c.get('sessionId')}`)
+      return c.json({ roomId })
+    }
+
+    // 409 Conflict — ID collision, retry with a new one
+    if (res.status === 409) continue
+
+    // Unexpected error from DO — forward it
+    const data = await res.json().catch(() => ({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to create room' },
+    }))
+    return new Response(JSON.stringify(data), {
+      status: res.status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  // All attempts exhausted
+  return c.json(
+    { error: { code: 'COLLISION_RETRIES_EXCEEDED', message: 'Could not generate a unique room ID after multiple attempts' } },
+    500,
+  )
 })
 
 app.get('/room/:roomId', async (c) => {
@@ -94,30 +153,24 @@ app.post(
     const { roomId } = c.req.param()
     const sessionId = c.get('sessionId')
     const body = await c.req.valid('json')
-
     const stub = roomStub(c.env, roomId)
-    const res = await stub.fetch('http://do/join', {
+    return doFetch(stub, 'http://do/join', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, playerId: body.playerId }),
     })
-    const data = await res.json()
-    return c.json(data)
   },
 )
 
 app.post('/room/:roomId/leave', async (c) => {
   const { roomId } = c.req.param()
   const sessionId = c.get('sessionId')
-
   const stub = roomStub(c.env, roomId)
-  const res = await stub.fetch('http://do/leave', {
+  return doFetch(stub, 'http://do/leave', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId }),
   })
-  const data = await res.json()
-  return c.json(data)
 })
 
 // ---- Game actions ---------------------------------------------------------
@@ -125,15 +178,12 @@ app.post('/room/:roomId/leave', async (c) => {
 app.post('/room/:roomId/start', async (c) => {
   const { roomId } = c.req.param()
   const sessionId = c.get('sessionId')
-
   const stub = roomStub(c.env, roomId)
-  const res = await stub.fetch('http://do/start', {
+  return doFetch(stub, 'http://do/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId }),
   })
-  const data = await res.json()
-  return c.json(data)
 })
 
 const ShapeSchema = z.enum(['L', 'O', 'S', 'T', 'I'])
@@ -153,15 +203,12 @@ app.post(
     const { roomId } = c.req.param()
     const sessionId = c.get('sessionId')
     const body = await c.req.valid('json')
-
     const stub = roomStub(c.env, roomId)
-    const res = await stub.fetch('http://do/turn', {
+    return doFetch(stub, 'http://do/turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, ...body }),
     })
-    const data = await res.json()
-    return c.json(data)
   },
 )
 

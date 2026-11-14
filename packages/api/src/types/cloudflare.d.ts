@@ -26,6 +26,7 @@ declare module 'cloudflare:workers' {
     readonly ctx: DurableObjectState
     readonly env: Env
     constructor(ctx: DurableObjectState, env: Env)
+    alarm?(): void | Promise<void>
   }
 
   interface DurableObjectState {
@@ -34,6 +35,8 @@ declare module 'cloudflare:workers' {
     getWebSockets(tag?: string): WebSocket[]
     waitUntil(promise: Promise<unknown>): void
     abort(reason?: string): void
+    setAlarm(timestamp: number): Promise<void>
+    getAlarm(): Promise<number | null>
   }
 
   interface DurableObjectStorage {

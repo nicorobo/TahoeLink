@@ -268,10 +268,12 @@ contexts connected via WebSocket; verify room state survives wrangler restart.
 **Goal:** the DO is the single authority for a complete game — atomic moves, fanout, and
 persistence are inherent.
 
-- [ ] **M3-1** Standardize errors: `HTTPException` with `{ error: { code, message } }`;
+- [x] **M3-1** Standardize errors: `HTTPException` with `{ error: { code, message } }`;
       add a Hono `onError` handler; never leak stack traces in production.
-- [ ] **M3-2** Room lifecycle: crypto room IDs (short, human-shareable), collision check,
-      404 for unknown rooms, DO alarm-based expiry (TTL), `createdAt`/`updatedAt`.
+- [x] **M3-2** Room lifecycle: crypto room IDs (short, human-shareable, 8-char Crockford base32),
+      collision check (DO returns 409 Conflict, retry up to 5 attempts),
+      404 for unknown rooms (state not auto-initialized), DO alarm-based 24h sliding TTL,
+      `createdAt`/`updatedAt` (already existed).
 - [ ] **M3-3** Full join rules on DO: stage check, seat availability, `MAX_PLAYERS`,
       idempotent rejoin for the same session, spectator mode, clear 4xx codes.
 - [ ] **M3-4** Start game: require `MIN_PLAYERS`, require an occupant, set turn order +
@@ -461,7 +463,7 @@ than silently choosing.
 | 4 | Realtime transport | SSE vs WebSocket | **WebSocket (DO Hibernation API)** | Best fit for Durable Objects; hibernation handles idle rooms cheaply | 2026-11-14 |
 | 5 | Cell encoding | `owner + turn*0.001` vs `owner*1000+turn` vs objects | TBD | Current encoding is fragile and conflates concerns | |
 | 6 | Player identity | Cookie session vs signed token vs accounts | **Cookie (httpOnly, session_id)** | Lowest friction for a link-shared game; `Secure` derived via `X-Forwarded-Proto` | 2026-11-14 |
-| 7 | Room code format | Random base36 vs crypto base32, length | Keep base36 for v1 | Short shareable IDs; collision check planned for M3-2 | 2026-11-14 |
+| 7 | Room code format | Random base36 vs crypto base32, length | **Crockford base32, 8 chars from 5 random bytes** | Short shareable IDs; unambiguous characters (no I/L/O/U); 40-bit entropy with collision retry | 2026-11-16 |
 | 8 | Rules reference | Write into skill vs separate doc | **`docs/GAME_RULES.md`** | Single canonical file; skill can reference it for verification | 2026-11-16 |
 | 9 | S/Z die face handling | Combined enum (`'sz'`) vs keep `'S'` and `'Z'` separate | TBD — likely a `DiceValue` member `'sz'` mapped to `legalShapes: ['S', 'Z']` | Player picks either S or Z; one die face, two playable shapes | 2026-11-16 |
 | 10 | Redis connection in Workers | Module-scope vs lazy init | **Lazy init via Proxy** | Avoids global-scope crash in Workers while Redis is still used pre-M2 | 2026-11-14 |
@@ -475,6 +477,9 @@ than silently choosing.
 | 18 | DO persistence | Key-value `storage.put/get` vs SQL API | **Key-value storage** | Simpler migration from Redis-like API; works with both KV-style and SQLite-backed DO storage | 2026-11-16 |
 | 19 | DO state transport | SSE events → WebSocket JSON envelopes `{event, data}` | **WebSocket with `{event, data}`** | DO Hibernation API's `getWebSockets()` broadcasts to all WS clients; JSON envelope matches existing event types | 2026-11-16 |
 | 20 | DO type declarations | Custom `cloudflare.d.ts` vs `@cloudflare/workers-types` | **Custom declaration file** | Avoids adding an npm dependency; the `cloudflare:workers` runtime module is provided by Workers | 2026-11-16 |
+| 21 | Error response format | Plain string vs `{ code, message }` vs array | **`{ error: { code, message } }`** | Matches existing `ErrorPayload` in events.ts; machine-readable code enables client-side i18n; structured, not just a string | 2026-11-16 |
+| 22 | Room TTL mechanism | DO alarm vs cron vs KV expiry | **DO alarm (sliding, reset on every persist)** | DO alarms fire at a set time and trigger `alarm()` handler; sliding expiry naturally extends on activity; no external cron needed | 2026-11-16 |
+| 23 | Room ID generation | `Math.random().toString(36)` vs `crypto.randomUUID()` vs base32 from random bytes | **5 bytes → 8 Crockford base32 chars** | Short enough for verbal sharing; avoids ambiguous I/L/O/U characters; crypto-strength randomness; 40-bit entropy with collision retry | 2026-11-16 |
 
 ---
 
