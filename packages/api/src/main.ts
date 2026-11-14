@@ -108,7 +108,7 @@ app.post('/room/:roomId/turn', zValidator('json', z.object({ column: z.number(),
     // roll dice
     // update player
     const turn = room.turn + 1
-    const shapeId = playerId + (turn * 0.001)
+    const shapeId = (playerId * 1000) + turn
     // TODO: Throw if invalid
     const board = getUpdatedBoard({ board: room.board, column, shape: getShape({ shape, rotation, flip }), shapeId })
     const updatedRoomState = { ...room, board, turn: room.turn + 1 }

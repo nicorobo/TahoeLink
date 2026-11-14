@@ -1,5 +1,6 @@
 import type { Board } from "../types"
 import { BOARD_HEIGHT, BOARD_WIDTH } from "../constants"
+import { getOwner } from "./cell"
 
 /**
  * Score tracking for a single player.
@@ -39,7 +40,7 @@ function arrayToSet(arr: string[]): Set<string> {
  * Find all connected components (groups) of same-owner cells on the board.
  * Returns groups grouped by owner ID.
  */
-function findGroups(board: Board): Map<number, Array<Set<string>>> {
+export function findGroups(board: Board): Map<number, Array<Set<string>>> {
     const visited = new Set<string>()
     const groupsByOwner = new Map<number, Array<Set<string>>>()
 
@@ -54,7 +55,7 @@ function findGroups(board: Board): Map<number, Array<Set<string>>> {
                 continue
             }
 
-            const owner = Math.floor(cell)
+            const owner = getOwner(cell)
             const group = new Set<string>()
 
             // BFS to find all connected cells of the same owner
@@ -66,7 +67,7 @@ function findGroups(board: Board): Map<number, Array<Set<string>>> {
                 if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT) continue
 
                 const c = board[cx]![cy]!
-                if (c < 0 || Math.floor(c) !== owner) continue
+                if (c < 0 || getOwner(c) !== owner) continue
 
                 visited.add(ck)
                 group.add(ck)

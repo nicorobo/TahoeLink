@@ -192,17 +192,17 @@ seat; `bun run check` is clean; CI is green.
         directly beneath the placed piece. Net = links gained − penalty.
       - Pure function: `scoreBoard(board, currentTurn, previousScores?) => { scores, scoredCells }`.
       - Add a re-entrant `scoreTurn(board, placedCells)` that computes the delta for one turn.
-- [ ] **M1-7** Add piece supply tracking: each player starts with 25 pieces (5 of each
-      shape). Track `piecesRemaining: Record<playerId, Record<ShapeFamily, number>>`.
+- [x] **M1-7** Add piece supply tracking: each player starts with 30 pieces (5 of each
+      shape). Track `piecesRemaining: Record<playerId, Record<Shape, number>>`.
       Add `canMove(board, piecesRemaining): boolean` — true if any player has a piece that
       can fit somewhere. Add `isGameOver(board, piecesRemaining): boolean` — tower is full
       (no piece can be placed without ceiling overflow) **or** no player can move. Add
       `getWinner(scores, board): { playerId, tieBrokenBy? }` — highest score, tie-breaker is
       **largest connected component** (most same-colour orthogonally adjacent cells).
       Add `TIE_BREAKER_LIMIT` constant in case ties are unbreakable.
-- [ ] **M1-8** Replace the `playerId + turn * 0.001` cell encoding with a stable one
-      (e.g. `playerId * 1000 + turn` and decode with `Math.floor(cell / 1000)`), or switch
-      to `{ owner, turn }` cells. Update `getCellBackgroundClass` and add a decode test.
+- [x] **M1-8** Replace the `playerId + turn * 0.001` cell encoding with a stable one
+      (`playerId * 1000 + turn` and decode with `Math.floor(cell / 1000)`).
+      Update `getCellBackgroundClass` and add a decode test.
 - [ ] **M1-9** Tests: golden placement fixtures for every shape/orientation (left wall, right
       wall, stacked, ceiling), scoring fixtures with `docs/GAME_RULES.md` worked examples,
       seeded-dice tests, empty-space penalty fixtures, merge-scoring fixtures, blocked-group
@@ -468,6 +468,8 @@ than silently choosing.
 | 13 | Occupied-cell check in `tryPlacePiece` | Keep vs remove | **Keep as defense-in-depth** | The gravity algorithm places pieces above all obstructions (proven by the math: `y - 1 < height` for every column). An occupied-cell conflict cannot occur with contiguous board state. The check is kept as a safety invariant for corrupted states and future shape variants. | 2026-11-16 |
 | 14 | DiceValue type for combined S/Z face | Keep S & Z as separate shapes vs 'SZ' member | **Separate `Shape` type with S & Z; `DiceValue` has `'SZ'` member** | Clean separation: Shape represents all 6 geometric shapes (L, O, T, I, S, Z); DiceValue represents die faces (I, O, T, L, SZ, any). `legalShapesForDie` maps SZ→[S,Z] and any→all. | 2026-11-16 |
 | 15 | Scoring: no-piece-twice tracking | Set<string> vs Map<string,boolean> vs separate per-player table | **Set<string> inside PlayerScore** | O(1) lookup for scored-cell check; serialized as sorted string[] for determinism. Pure function model. | 2026-11-16 |
+| 16 | Cell encoding | `playerId*1000+turn` vs `{owner,turn}` objects | **`playerId*1000+turn` with `CELL_OWNER_MULTIPLIER=1000`** | Keeps board as flat `number[][]`; avoids object overhead; supports up to 999 turns per player. | 2026-11-16 |
+| 17 | Piece count per player | 25 (5×5 shapes) vs 30 (5×6 shapes) | **30 (6 shapes × 5 each)** | We have 6 distinct shape geometries (L,O,T,I,S,Z); splitting S/Z means each needs its own piece pool. | 2026-11-16 |
 
 ---
 

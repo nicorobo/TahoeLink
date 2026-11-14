@@ -7,52 +7,47 @@ entries; older detail lives in git and `PLAN.md`, so archive rather than endless
 ## Snapshot
 
 - Date: 2026-11-16
-- Branch: `milestone-1.4-1.6`; M1-4, M1-5, M1-6 implemented and verified
-- Current milestone: **M1 — rules engine in shared** (M1-2, M1-3, M1-4, M1-5, M1-6 done)
-- Next task: **M1-7** (piece supply, game-over, winner)
+- Branch: `milestone-1.7-1.8`; M1-7, M1-8 implemented and verified
+- Current milestone: **M1 — rules engine in shared** (M1-2..M1-8 done)
+- Next task: **M1-9** (golden placement + scoring fixtures, fuzz loop)
 
 To resume: read `AGENTS.md`, then run `/task <next-id>`; use `/verify` before committing and
 `/handoff` at the end of the session.
 
-## What changed last session
+## What changed this session
 
 | Task | Change | Files |
 |------|--------|-------|
-| M1-4 | Added `getLegalColumns(board, shape): number[]` — iterates all columns and returns valid ones | `packages/shared/src/game-mechanics/board.ts` (+23 lines) |
-| M1-4 | Tests: empty board, full tower, blocked columns, partial fill | `packages/shared/src/game-mechanics/board.test.ts` (+57 lines) |
-| M1-5 | Added Z shape geometry (mirror of S); updated shapes export | `packages/shared/src/game-mechanics/shapes.ts` |
-| M1-5 | Updated `Shape` type to include `'Z'`; `DiceValue` changed to `'I'\|'O'\|'T'\|'L'\|'SZ'\|'any'` | `packages/shared/src/types.ts` |
-| M1-5 | Created `dice.ts`: `rollDie` (injectable RNG), `DICE_FACES`, `legalShapesForDie` mapping (SZ→[S,Z], any→all 6) | `packages/shared/src/game-mechanics/dice.ts` |
-| M1-5 | Tests: DICE_FACES, mapping, injectable RNG, deterministic/cycling/default | `packages/shared/src/game-mechanics/dice.test.ts` |
-| M1-6 | Created `scoring.ts`: `scoreBoard` (full recompute with `PlayerScore` tracking), `scoreTurn` (link scoring + empty-space penalty, delta calculation) | `packages/shared/src/game-mechanics/scoring.ts` |
-| M1-6 | Tests: 23 tests — empty/no-score/3+/4+/multi-group, merge scenarios, diagonal/orthogonal, gap penalties, combined delta, previous-scores preservation | `packages/shared/src/game-mechanics/scoring.test.ts` |
-| M1-5/6 | Updated shared index exports | `packages/shared/src/index.ts` |
+| M1-8 | Added `encodeCell`, `getOwner`, `getTurn` with `CELL_OWNER_MULTIPLIER=1000` | `packages/shared/src/game-mechanics/cell.ts` |
+| M1-8 | Added decode test (6 tests: round-trip, distinct values, up to turn 999) | `packages/shared/src/game-mechanics/cell.test.ts` |
+| M1-8 | Updated `findGroups` to use `getOwner` instead of `Math.floor(cell)` | `packages/shared/src/game-mechanics/scoring.ts` |
+| M1-8 | Updated `getCellBackgroundClass` to decode via `/ 1000` | `packages/app/src/lib/utils/color.ts` |
+| M1-8 | Updated API `/room/:id/turn` to use `playerId * 1000 + turn` | `packages/api/src/main.ts` |
+| M1-8 | Updated all tests to use `encodeCell` for board cell values | `board.test.ts`, `scoring.test.ts` |
+| M1-7 | Created `game-state.ts`: `createPieceSupply`, `canMove`, `isGameOver`, `getWinner` with tie-breaker, `TIE_BREAKER_LIMIT` | `packages/shared/src/game-mechanics/game-state.ts` |
+| M1-7 | Added `TIE_BREAKER_LIMIT = -1` and `CELL_OWNER_MULTIPLIER = 1000` to constants | `packages/shared/src/constants.ts` |
+| M1-7 | Tests: 5 supply, 5 canMove, 3 isGameOver, 7 getWinner tests | `packages/shared/src/game-mechanics/game-state.test.ts` |
 
 ### Design decisions
 
-1. **`DiceValue` vs `Shape` separation**: `Shape` (`'L'|'O'|'T'|'I'|'S'|'Z'`) covers all 6 geometric shapes. `DiceValue` (`'I'|'O'|'T'|'L'|'SZ'|'any'`) covers the 6 die faces. `legalShapesForDie` maps between them.
-2. **Scoring model**: `PlayerScore` wraps `{ score, scoredCells: string[] }` where `scoredCells` stores `"x,y"` keys. The no-piece-twice invariant is enforced by comparing against `scoredCells` before awarding points. `scoreBoard` recomputes from scratch given previous state; `scoreTurn` computes delta + empty-space penalty.
-3. **Gap detection**: checks `board[px][py+1] < 0` for each placed cell. Penalty is per-unique-gap-column (not per cell): 1 gap → −1, 2+ → −2.
+1. **Cell encoding**: `playerId * 1000 + turn` with `CELL_OWNER_MULTIPLIER = 1000`. Supports up to 999 turns per player before encoding collision. Chosen over `{owner, turn}` objects to keep board as flat `number[][]`.
+2. **Piece count**: 30 per player (6 shapes × 5 each), not 25. We have 6 distinct shape geometries (L,O,T,I,S,Z) in the codebase; splitting S/Z means each needs its own piece pool.
 
 ## Verified evidence
 
 | Check | Result |
 | --- | --- |
-| `cd packages/shared && bun test` | **65 pass, 0 fail** — board (30), dice (11), scoring (24) |
-| `bunx tsc --noEmit` (shared) | clean |
-| `bunx tsc --noEmit` (api) | clean |
-| `bun run check` (app) | clean (1 pre-existing a11y warning) |
+| `cd packages/shared && bun test` | **91 pass, 0 fail** — board (30), dice (11), scoring (23), cell (6), game-state (20) |
+| `cd packages/shared && bunx tsc --noEmit` | clean |
+| `cd packages/api && bunx tsc --noEmit` | clean |
+| `cd packages/app && bun run check` | clean (1 pre-existing a11y warning) |
 
 ## Not verified / known gaps
 
-- No fuzz loop (planned for M1-9).
+- No fuzz loop, golden fixtures, or skipped-turn logic (M1-9, M1-10).
+- No blocked-group detection (M1-11), first-turn S/Z penalty (M1-12), or DiceValue update (M1-13 — done previously).
+- No 2-player shared-color mode at the API level (M1-14 — `createPieceSupply` supports it but no consumer yet).
 - Docker/Redis routes remain broken in wrangler dev — M2 target.
-- The `DiceValue` type change (`'SZ'` instead of `'S'`) affects `packages/api/src/models/room.ts:27` which casts `as DiceValue`. Existing Redis data uses old values (`'S'`), but this is a stopgap until M2 replaces Redis with Durable Objects.
-- Three P1 tasks remain unchecked: M1-7, M1-8, M1-9, M1-10, M1-11, M1-12, M1-13, M1-14.
-
-## Open questions
-
-- None specific to M1-4/5/6.
 
 ## Environment
 
@@ -61,16 +56,15 @@ To resume: read `AGENTS.md`, then run `/task <next-id>`; use `/verify` before co
 
 ## Session log
 
+### 2026-11-16 — M1-7, M1-8: Piece supply, game-over, winner, stable cell encoding
+
+Implemented two rules-engine tasks:
+- **M1-7**: `createPieceSupply` (30 pieces per player, 6 shapes × 5), `canMove` (checks any shape orientation in any column), `isGameOver` (tower full or no pieces remain), `getWinner` with largest-connected-component tie-breaker and `TIE_BREAKER_LIMIT` sentinel. 20 tests.
+- **M1-8**: `encodeCell`/`getOwner`/`getTurn` helpers with `CELL_OWNER_MULTIPLIER=1000`. Updated all board/scoring tests and `findGroups` to use the new decode. Updated `getCellBackgroundClass` in the app and the API's turn handler. 6 tests.
+- 20 test files across 5 test suites; all existing tests updated for new cell encoding.
+
+Next: **M1-9** (golden fixtures, fuzz loop).
+
 ### 2026-11-16 — M1-4, M1-5, M1-6: Legal columns, dice engine, scoring engine
 
-Implemented three rules-engine tasks:
-- **M1-4**: `getLegalColumns` iterates all 10 columns and returns those where `tryPlacePiece` succeeds. 7 tests.
-- **M1-5**: Added Z shape (mirror of S), updated `DiceValue` to 6 die-face members, `rollDie` with injectable RNG, `legalShapesForDie` mapping. 11 tests.
-- **M1-6**: `scoreBoard` finds connected components via BFS flood-fill, scores cells in 3+ groups (no-piece-twice via `scoredCells` tracking). `scoreTurn` wraps `scoreBoard` + empty-space penalty (−1/column, max −2). 23 tests.
-- Z shape was confirmed by mirroring S's rotations: `Z = [[s01,s11,s10], [s110,s011]]`.
-
-Next: **M1-7** (piece supply, game-over detection, winner with tie-breaker).
-
-### 2026-11-16 — M1-2 and M1-3: Safe placement + refactored gravity
-
-Implemented `tryPlacePiece` with full validation (bounds, occupied cells, ceiling overflow) and refactored `getUpdatedBoard` to delegate to it. 23 tests.
+Implemented `getLegalColumns`, `rollDie`, `scoreBoard`/`scoreTurn`, Z shape, updated `DiceValue`/`Shape` types. 65 tests (expanded to 91 this session with cell + game-state).
