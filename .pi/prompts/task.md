@@ -9,6 +9,7 @@ Extra constraints: ${@:2}
 
 Workflow:
 
+0. If there is unstaged work in the current git branch, please stage all of it, commit, and create a new git branch with a name that makes it clear what you'll be implementing. 
 1. Restate the task's acceptance criteria and the files you expect to touch.
 2. If this changes the rules engine, write a failing test in `packages/shared` first.
 3. Make the smallest change that satisfies the task. Do not refactor unrelated code, add

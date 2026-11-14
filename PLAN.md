@@ -169,10 +169,10 @@ seat; `bun run check` is clean; CI is green.
 - [ ] **M1-1** Confirm `docs/GAME_RULES.md` stays the canonical rules reference. Add a
       `.pi/skills/tahoe-rules/SKILL.md` skill with worked examples and expected scores for
       the scoring engine, if needed for verification.
-- [ ] **M1-2** Add `tryPlacePiece({ board, column, shape }) => { board, cells } | null`.
+- [x] **M1-2** Add `tryPlacePiece({ board, column, shape }) => { board, cells } | null`.
       Reject: column out of range, any cell out of range, any occupied cell, ceiling
       overflow. Keep a thin throwing wrapper only if callers need it.
-- [ ] **M1-3** Refactor `getUpdatedBoard` to use `tryPlacePiece`; preserve current correct
+- [x] **M1-3** Refactor `getUpdatedBoard` to use `tryPlacePiece`; preserve current correct
       gravity results. Document/enforce the "all shape columns have equal length" invariant.
 - [ ] **M1-4** Add `getLegalColumns(board, shape): number[]` for the UI and server.
 - [ ] **M1-5** Add `rollDie(rng: () => number): DiceValue` with an injectable RNG and the
@@ -465,6 +465,7 @@ than silently choosing.
 | 10 | Redis connection in Workers | Module-scope vs lazy init | **Lazy init via Proxy** | Avoids global-scope crash in Workers while Redis is still used pre-M2 | 2026-11-14 |
 | 11 | API base strategy | Env override vs hardcoded vs SSR-per-route | **`ssr = false` + Vite proxy + `/api` constant** | Simplest setup: browser always uses `/api`, Vite proxies to wrangler dev; env override for split deployments | 2026-11-14 |
 | 12 | Cookie Secure policy | Always true vs derived from header/env | **Derive from `X-Forwarded-Proto`; override via `COOKIE_SECURE` env** | Plain HTTP (localhost) works without browser warnings; production behind TLS auto-detects | 2026-11-14 |
+| 13 | Occupied-cell check in `tryPlacePiece` | Keep vs remove | **Keep as defense-in-depth** | The gravity algorithm places pieces above all obstructions (proven by the math: `y - 1 < height` for every column). An occupied-cell conflict cannot occur with contiguous board state. The check is kept as a safety invariant for corrupted states and future shape variants. | 2026-11-16 |
 
 ---
 
