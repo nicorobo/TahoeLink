@@ -6,47 +6,63 @@ entries; older detail lives in git and `PLAN.md`, so archive rather than endless
 
 ## Snapshot
 
-- Date: 2026-11-16 (session 2)
-- Branch: `milestone-1.10-1.12`; M1-10 through M1-14 implemented and verified
-- Current milestone: **M1 — rules engine in shared** (all M1 tasks complete ✅)
-- Next milestone: **M2 — Durable Object foundation** (M2-1 .. M2-7)
+- Date: 2026-11-16 (session 3)
+- Branch: `milestone-2.1-2.4`; M2-1 through M2-4 implemented and verified
+- Current milestone: **M2 — Durable Object foundation** (M2-1..M2-4 complete, M2-5..M2-7 next)
 
-To resume: read `AGENTS.md`, then run `/task M2-1`; use `/verify` before committing and
-`/handoff` at the end of the session.
+To resume: read `AGENTS.md`, then run `/task M2-5` (or `/task M2-7` for next task in M2);
+use `/verify` before committing and `/handoff` at the end of the session.
 
 ## What changed this session
 
 | Task | Change | Files |
 |------|--------|-------|
-| M1-10 | Added `trySkipTurn` — skips when no pieces remain or shape cannot fit in any orientation. Covers SZ (both S and Z checked) and any (all 6 shapes checked) die faces. 12 tests. | `packages/shared/src/game-mechanics/game-state.ts`, `game-state.test.ts` |
-| M1-11 | Added `getBlockedGroups` — detects groups fully surrounded by opponents/board edge. Returns `Record<playerId, Set<string>[]>`. 10 tests including multi-player, mixed blocked/unblocked, edge-corner cases. | `packages/shared/src/game-mechanics/scoring.ts`, `scoring.test.ts` |
-| M1-12 | Added `detectFirstTurnSZO` — returns true when board is empty and diceValue is `'SZ'`. 6 tests. | `packages/shared/src/game-mechanics/game-state.ts`, `game-state.test.ts` |
-| M1-13 | Verified: `DiceValue` already has `'SZ'` member, `DICE_FACES` constant exists with 6 entries, `legalShapesForDie` maps correctly. No changes needed. | — (verified) |
-| M1-14 | Verified: `createPieceSupply` already supports `sharedColor` parameter with shared-object semantics for 2-player mode. No changes needed. | — (verified) |
+| M2-1 | Created `RoomDurableObject` class managing seats/board/stage/turn/roll/scores via DO key-value storage. WebSocket Hibernation API for real-time broadcast. | `packages/api/src/durable-objects/room-do.ts` (new) |
+| M2-2 | Wired DO into Hono routes: create-room → DO init, GET /room/:id → DO fetch, removed Redis models. | `packages/api/src/main.ts` (rewritten), removed `models/room.ts`, `redis.ts` |
+| M2-3 | WebSocket upgrade at `/ws/room/:id` forwarding to DO Hibernation API. Removed SSE broadcasting. | `packages/api/src/main.ts` (ws route), removed `broadcasting/`, `middleware/sse.ts` |
+| M2-4 | Join/leave handled by DO methods with seat array + broadcast. Removed players model. | `packages/api/src/durable-objects/room-do.ts`, removed `models/players.ts` |
+| — | Updated Workers entry point to export DO class for wrangler binding. | `packages/api/src/index.ts` |
+| — | Added DO binding + migration to wrangler config. | `packages/api/wrangler.jsonc` |
+| — | Custom type declarations for `cloudflare:workers` module avoiding extra npm dependency. | `packages/api/src/types/cloudflare.d.ts` (new) |
+
+### Old files deleted
+
+- `packages/api/src/models/room.ts`, `packages/api/src/models/players.ts` — replaced by DO
+- `packages/api/src/redis.ts` — no longer needed
+- `packages/api/src/broadcasting/` (3 files) — replaced by WS
+- `packages/api/src/middleware/sse.ts` — no longer needed
 
 ### Design decisions
 
-1. **`trySkipTurn` uses `legalShapesForDie`** to resolve dice values to shape lists, ensuring SZ checks both S and Z. For `any`, all 6 shapes are checked; if any shape has pieces and fits, the turn is not skipped.
-2. **`getBlockedGroups` uses `findGroups`** (existing BFS) then checks each group for empty orthogonal neighbors. A group is blocked only when *no* cell in the group has an empty neighbor within bounds.
-3. **`detectFirstTurnSZO` checks board emptiness** (all cells == -1) rather than tracking turn count, keeping it a pure function without external state.
-4. **M1-13 and M1-14 were already implemented** in earlier M1 sessions (DiceValue with 'SZ', DICE_FACES, legalShapesForDie, createPieceSupply with sharedColor). Only verification was needed.
+1. **DO persistence**: Used key-value `storage.put/get` (not SQL API) for simpler migration from Redis-like API.
+2. **State transport**: WebSocket `{event, data}` JSON envelopes via `ctx.getWebSockets()` broadcast.
+3. **Type declarations**: Custom `cloudflare.d.ts` instead of `@cloudflare/workers-types` to avoid extra dependency. Declares `DurableObject`, `DurableObjectState`, `DurableObjectStorage`, `WebSocketPair`, `DurableObjectNamespace` types.
 
 ## Verified evidence
 
 | Check | Result |
 | --- | --- |
-| `cd packages/shared && bun test` | **182 pass, 0 fail** — added 28 new tests |
-| `cd packages/shared && bunx tsc --noEmit` | clean |
 | `cd packages/api && bunx tsc --noEmit` | clean |
-| `cd packages/app && bun run check` | clean (1 pre-existing a11y warning) |
+| `cd packages/shared && bunx tsc --noEmit` | clean |
+| `cd packages/app && bun run check` | 0 errors, 1 pre-existing a11y warning |
+| `cd packages/shared && bun test` | **182 pass, 0 fail** |
+| `POST /create-room` on wrangler local dev | 200, returns `{roomId}` |
+| `POST /room/:id/join` ×2 | 200, returns `{playerId, playerIds}` |
+| `GET /room/:id` | 200, returns room + seats + playerPosition |
+| `POST /room/:id/start` | 200, stage transitions to `in-progress` |
+| `POST /room/:id/turn` | 200, turn increments |
+| `POST /room/:id/leave` | 200, player removed from seat list |
 
 ## Not verified / known gaps
 
-- The fuzz loop does not verify floating-cell invariants (the gravity algorithm permits overhangs by design).
-- Docker/Redis routes remain broken in wrangler dev — M2 target.
-- `detectFirstTurnSZO` is a pure function but is not yet wired into the server turn handler — M3-4 stage.
-- `getBlockedGroups` is not yet integrated into scoring — scoring currently ignores blocked-group status per R4/R15.
-- No 2-player shared-color mode at the API level — M3 or M4 target.
+- **WebSocket full handshake** not tested — no `websocat` or browser client connected. The upgrade endpoint is wired, but we haven't verified the full WS lifecycle (connect → state snapshot → broadcast on join/leave). This should be tested in M2-5/M2-6 when event types are updated.
+- **No API tests** — M2-6 (DO lifecycle tests with `SELF.fetch()`) still pending.
+- **`MIN_PLAYERS` / `MAX_PLAYERS`** are defined in shared constants but not enforced in DO start handler — M3-4 target.
+- **Turn handler is a stub** — no board math, dice roll, scoring, or active-player validation. Full turn enforcement in M3-5.
+- **No `min-players` check on start** — DO start handler allows starting with any player count. M3-4 target.
+- **Docker Compose** was already deleted in a prior session.
+- **`smoke.sh`** script still references Redis-dependent routes — needs updating (M2-6 or M2-7).
+- macOS has no `timeout` command; use `perl -e 'alarm shift; exec @ARGV'`.
 
 ## Environment
 
@@ -55,14 +71,17 @@ To resume: read `AGENTS.md`, then run `/task M2-1`; use `/verify` before committ
 
 ## Session log
 
-### 2026-11-16 (session 2) — M1-10..M1-14: Skip-turn, blocked groups, first-turn S/Z, verify M1-13/14
+### 2026-11-16 (session 3) — M2-1..M2-4: Durable Object foundation
 
-Implemented the remaining M1 rules-engine tasks:
-- **M1-10**: `trySkipTurn` checks both pieces-remaining and fit-in-board for rolled shape(s). Handles SZ face (both S and Z) and any (all 6 shapes). 12 tests covering all skip/not-skip branches.
-- **M1-11**: `getBlockedGroups` reuses `findGroups` BFS, checks each group for empty orthogonal neighbors. 10 tests: single/multi-cell, edge/corner, multi-player, mixed blocked/unblocked.
-- **M1-12**: `detectFirstTurnSZO` returns true when board is empty and roll is SZ. Pure function, 6 tests.
-- **M1-13**: Verified `DiceValue` type has `'SZ'` member, `DICE_FACES` has 6 entries, `legalShapesForDie` correctly maps SZ→[S,Z] and any→all. No changes needed.
-- **M1-14**: Verified `createPieceSupply` supports `sharedColor` parameter for 2-player shared-color mode. Tests confirm shared-object semantics.
-- 182 total tests (28 new), all passing. Typecheck clean across all packages.
+Created the RoomDurableObject class replacing all Redis-based models and SSE broadcasting:
 
-Next: **M2-1** (RoomDurableObject skeleton, DO storage schema).
+- **DO class** (`room-do.ts`): Manages room state (seats, board, stage, turn, roll, scores) via `ctx.storage`. Handles GET (room state), POST (join, leave, init, start, turn), and WebSocket upgrade. Uses Hibernation API for WS connections and `ctx.getWebSockets()` for broadcasting.
+- **Hono routes** (`main.ts`): Rewritten to forward all room operations to the DO via `stub.fetch()`. Removed Redis/SSE dependencies. Routes for create, read, join, leave, start, turn, and WS upgrade all work end-to-end.
+- **Entry point** (`index.ts`): Exports both the DO class (for wrangler binding) and the fetch handler.
+- **Type declarations** (`cloudflare.d.ts`): Custom types for `cloudflare:workers` module and `DurableObjectNamespace` global.
+
+All checks pass. All HTTP endpoints verified against running wrangler dev instance.
+
+**Debugging note**: The DO `fetch()` dispatch must explicitly call out each path (`/start`, `/turn`) — it doesn't fall through from other POST paths. The initial write of the DO omitted the `/start` and `/turn` dispatch entries, causing 404 from the DO even after the Hono route correctly forwarded requests.
+
+Next: **M2-5** (refresh events.ts), **M2-6** (DO lifecycle tests), or **M2-7** (documentation cleanup).

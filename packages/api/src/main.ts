@@ -1,148 +1,196 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
-import { streamSSE } from 'hono/streaming'
-import { sseHeaders } from './middleware/sse'
-import { sessionId } from './middleware/sessionId'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { getRoom, setRoom } from './models/room'
-import { setPlayer, addPlayerToGame, verifyPlayer, getPositionBySessionId, getPlayerIds, getPlayerIdBySessionId, unsetPlayer, removePlayerFromGame } from './models/players'
-import { broadcastToRoom } from './broadcasting/broadcastToRoom'
-import { handleRoomSSE } from './broadcasting/roomSSE'
-import { getUpdatedBoard, getShape } from '@tahoelink/shared'
+import { sessionId } from './middleware/sessionId'
 
-type Variables = {
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type Env = {
+  Variables: {
     sessionId: string
+  }
+  Bindings: {
+    ROOMS: DurableObjectNamespace
+  }
 }
 
-const app = new Hono<{ Variables: Variables }>()
-const PORT = process.env.PORT || 3000
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
+
+const app = new Hono<Env>()
+const PORT = process.env.PORT ?? 3000
 
 app.use(cors())
 app.use(sessionId)
 app.use(logger())
 
-app.get('/', (c) => {
-    console.log('Hello Hono!')
-    return c.text('Hello Hono!')
-})
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function roomStub(env: Env['Bindings'], roomId: string): DurableObjectStub {
+  const id = env.ROOMS.idFromName(roomId)
+  return env.ROOMS.get(id)
+}
+
+/** Forward request to DO, return JSON response. */
+async function doFetch(
+  stub: DurableObjectStub,
+  url: string,
+  options?: { method?: string; headers?: Record<string, string>; body?: string },
+): Promise<Response> {
+  const res = await stub.fetch(url, options)
+  const body = await res.json()
+  return new Response(JSON.stringify(body), {
+    status: res.status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+function withSession(sessionId: string, extra?: Record<string, string>): Record<string, string> {
+  return { 'X-Session-Id': sessionId, ...extra }
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+app.get('/', (c) => c.text('Hello Hono!'))
 
 app.get('/health', (c) => {
-    return c.json({ status: 'ok', timestamp: new Date().toISOString() })
+  return c.json({ status: 'ok', timestamp: new Date().toISOString() })
 })
+
+// ---- Room lifecycle -------------------------------------------------------
 
 app.post('/create-room', async (c) => {
-    // Generate a  short random string
-    const roomId = Math.random().toString(36).substring(2, 15)
-    await setRoom(roomId)
-    console.log(`Room ${roomId} created by ${c.get('sessionId')}`)
-    return c.json({ roomId })
-})
-
-
-app.post('/room/:roomId/join', zValidator('json', z.object({ playerId: z.number() })), async (c) => {
-    // Ensure they haven't already joined
-    // Ensure game hasn't already begun
-    // Check for empty slots (players in the list with no sessionId)
-    const { roomId } = c.req.param()
-    const { playerId } = c.req.valid('json')
-    const sessionId = c.get('sessionId')
-
-    await setPlayer({ roomId, sessionId, playerId });
-    const { turn } = await getRoom(roomId)
-    if (turn <= 0) {
-        await addPlayerToGame({ roomId, playerId })
-    }
-    const playerIds = await getPlayerIds(roomId)
-    broadcastToRoom(roomId, sessionId, { playerIds }, 'player-joined')
-    return c.json({ playerId, playerIds })
-})
-
-
-app.post('/room/:roomId/leave', async (c) => {
-    const { roomId } = c.req.param()
-    const sessionId = c.get('sessionId')
-    const playerId = await getPlayerIdBySessionId({ roomId, sessionId })
-    if (playerId === null) {
-        throw new Error('User is not a player.')
-    }
-    await unsetPlayer({ roomId, playerId });
-    const { turn } = await getRoom(roomId)
-    if (turn <= 0) {
-        const removed = await removePlayerFromGame({ roomId, playerId })
-    }
-    const playerIds = await getPlayerIds(roomId)
-    broadcastToRoom(roomId, sessionId, { playerIds }, 'player-left')
-    return c.json({ playerIds })
-})
-
-app.post('/room/:roomId/start', async (c) => {
-    const { roomId } = c.req.param()
-    const sessionId = c.get('sessionId')
-    await verifyPlayer({ roomId, sessionId })
-    const room = await getRoom(roomId)
-    const updatedRoomState = { ...room, stage: 'in-progress' as const }
-    await setRoom(roomId, updatedRoomState)
-    // verify we have minimum players
-    broadcastToRoom(roomId, c.get('sessionId'), updatedRoomState, 'turn-start')
-
-    return c.json(updatedRoomState)
-})
-
-
-const ShapeSchema = z.enum(["L", "O", "S", "T", "I"]);
-
-app.post('/room/:roomId/turn', zValidator('json', z.object({ column: z.number(), shape: ShapeSchema, rotation: z.number(), flip: z.boolean() })), async (c) => {
-    const { roomId } = c.req.param()
-    const { column, shape, rotation, flip } = c.req.valid('json')
-    const room = await getRoom(roomId)
-    const sessionId = c.get('sessionId')
-    if (room.stage !== 'in-progress') {
-        throw new Error('Game is currently not in-progress')
-    }
-    // check that its the right player
-    const playerId = await verifyPlayer({ roomId, sessionId })
-    // check that their shape matches the dice
-    // update board
-    // roll dice
-    // update player
-    const turn = room.turn + 1
-    const shapeId = (playerId * 1000) + turn
-    // TODO: Throw if invalid
-    const board = getUpdatedBoard({ board: room.board, column, shape: getShape({ shape, rotation, flip }), shapeId })
-    const updatedRoomState = { ...room, board, turn: room.turn + 1 }
-    await setRoom(roomId, updatedRoomState)
-    broadcastToRoom(roomId, sessionId, updatedRoomState, 'turn-start')
-    return c.json(updatedRoomState)
+  const roomId = Math.random().toString(36).substring(2, 15)
+  const stub = roomStub(c.env, roomId)
+  await stub.fetch('http://do/init', { method: 'POST' })
+  console.log(`Room ${roomId} created by ${c.get('sessionId')}`)
+  return c.json({ roomId })
 })
 
 app.get('/room/:roomId', async (c) => {
+  const { roomId } = c.req.param()
+  const sessionId = c.get('sessionId')
+  const stub = roomStub(c.env, roomId)
+  return doFetch(stub, `http://do/?roomId=${roomId}`, {
+    headers: withSession(sessionId),
+  })
+})
+
+// ---- Join / leave ---------------------------------------------------------
+
+app.post(
+  '/room/:roomId/join',
+  zValidator('json', z.object({ playerId: z.number().optional() })),
+  async (c) => {
     const { roomId } = c.req.param()
     const sessionId = c.get('sessionId')
-    const room = await getRoom(roomId)
-    const playerIds = await getPlayerIds(roomId)
-    const playerPosition = await getPositionBySessionId({ roomId, sessionId })
-    const playerId = playerPosition >= 0 ? playerIds[playerPosition] : null
-    return c.json({
-        room,
-        playerIds,
-        playerPosition,
-        playerId
+    const body = await c.req.valid('json')
+
+    const stub = roomStub(c.env, roomId)
+    const res = await stub.fetch('http://do/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, playerId: body.playerId }),
     })
+    const data = await res.json()
+    return c.json(data)
+  },
+)
+
+app.post('/room/:roomId/leave', async (c) => {
+  const { roomId } = c.req.param()
+  const sessionId = c.get('sessionId')
+
+  const stub = roomStub(c.env, roomId)
+  const res = await stub.fetch('http://do/leave', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  })
+  const data = await res.json()
+  return c.json(data)
 })
 
-// Consider adding a ping interval to keep the connection alive
-app.get('/sse/room/:roomId', sseHeaders, (c) => {
+// ---- Game actions ---------------------------------------------------------
+
+app.post('/room/:roomId/start', async (c) => {
+  const { roomId } = c.req.param()
+  const sessionId = c.get('sessionId')
+
+  const stub = roomStub(c.env, roomId)
+  const res = await stub.fetch('http://do/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  })
+  const data = await res.json()
+  return c.json(data)
+})
+
+const ShapeSchema = z.enum(['L', 'O', 'S', 'T', 'I'])
+
+app.post(
+  '/room/:roomId/turn',
+  zValidator(
+    'json',
+    z.object({
+      column: z.number(),
+      shape: ShapeSchema,
+      rotation: z.number(),
+      flip: z.boolean(),
+    }),
+  ),
+  async (c) => {
     const { roomId } = c.req.param()
     const sessionId = c.get('sessionId')
+    const body = await c.req.valid('json')
 
-    return streamSSE(c, (stream) => handleRoomSSE(c, stream, roomId, sessionId))
+    const stub = roomStub(c.env, roomId)
+    const res = await stub.fetch('http://do/turn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, ...body }),
+    })
+    const data = await res.json()
+    return c.json(data)
+  },
+)
+
+// ---- WebSocket ------------------------------------------------------------
+
+app.get('/ws/room/:roomId', async (c) => {
+  const { roomId } = c.req.param()
+  const sessionId = c.get('sessionId')
+  const stub = roomStub(c.env, roomId)
+
+  const url =
+    `http://do/ws?roomId=${encodeURIComponent(roomId)}&sessionId=${encodeURIComponent(sessionId)}`
+  const upgradeRes = await stub.fetch(url, {
+    headers: {
+      Upgrade: 'websocket',
+      'Sec-WebSocket-Key': c.req.header('Sec-WebSocket-Key') ?? '',
+      'Sec-WebSocket-Version': c.req.header('Sec-WebSocket-Version') ?? '13',
+      'Sec-WebSocket-Protocol': c.req.header('Sec-WebSocket-Protocol') ?? '',
+    },
+  })
+
+  return upgradeRes
 })
 
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
 
 export default {
-    port: PORT,
-    fetch: app.fetch,
-    idleTimeout: 0 // Required for SSE
+  port: PORT,
+  fetch: app.fetch,
 }

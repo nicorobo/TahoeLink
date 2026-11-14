@@ -237,14 +237,14 @@ from the fuzz test.
 **Goal:** a RoomDurableObject owns room state and speaks WebSocket. Redis models and SSE
 broadcasting are deleted.
 
-- [ ] **M2-1** Create `RoomDurableObject` class with DO storage schema (seats, board, stage,
+- [x] **M2-1** Create `RoomDurableObject` class with DO storage schema (seats, board, stage,
       turn, roll, scores, version). Use SQLite-backed DO storage.
-- [ ] **M2-2** Wire DO into Hono routes: `POST /create-room` → `env.ROOMS.idFromName(id)`;
+- [x] **M2-2** Wire DO into Hono routes: `POST /create-room` → `env.ROOMS.idFromName(id)`;
       `GET /room/:id` → DO fetch returning state. Remove `models/room.ts` and `redis.ts`.
-- [ ] **M2-3** WebSocket upgrade on `/ws/room/:id` → DO Hibernation API
+- [x] **M2-3** WebSocket upgrade on `/ws/room/:id` → DO Hibernation API
       (`state.acceptWebSocket`). Handle connect, disconnect, and broadcast via
       `ctx.getWebSockets()`. Remove `broadcasting/` and `middleware/sse.ts`.
-- [ ] **M2-4** Move join/leave into DO methods: join assigns a seat, leave frees it,
+- [x] **M2-4** Move join/leave into DO methods: join assigns a seat, leave frees it,
       both broadcast the updated state. Remove `models/players.ts`.
 - [ ] **M2-5** Refresh `shared/src/events.ts` for WebSocket payloads: `connected`,
       `participant-change`, `state`, `error`. Fix the existing type mismatches (D7).
@@ -470,6 +470,9 @@ than silently choosing.
 | 15 | Scoring: no-piece-twice tracking | Set<string> vs Map<string,boolean> vs separate per-player table | **Set<string> inside PlayerScore** | O(1) lookup for scored-cell check; serialized as sorted string[] for determinism. Pure function model. | 2026-11-16 |
 | 16 | Cell encoding | `playerId*1000+turn` vs `{owner,turn}` objects | **`playerId*1000+turn` with `CELL_OWNER_MULTIPLIER=1000`** | Keeps board as flat `number[][]`; avoids object overhead; supports up to 999 turns per player. | 2026-11-16 |
 | 17 | Piece count per player | 25 (5×5 shapes) vs 30 (5×6 shapes) | **30 (6 shapes × 5 each)** | We have 6 distinct shape geometries (L,O,T,I,S,Z); splitting S/Z means each needs its own piece pool. | 2026-11-16 |
+| 18 | DO persistence | Key-value `storage.put/get` vs SQL API | **Key-value storage** | Simpler migration from Redis-like API; works with both KV-style and SQLite-backed DO storage | 2026-11-16 |
+| 19 | DO state transport | SSE events → WebSocket JSON envelopes `{event, data}` | **WebSocket with `{event, data}`** | DO Hibernation API's `getWebSockets()` broadcasts to all WS clients; JSON envelope matches existing event types | 2026-11-16 |
+| 20 | DO type declarations | Custom `cloudflare.d.ts` vs `@cloudflare/workers-types` | **Custom declaration file** | Avoids adding an npm dependency; the `cloudflare:workers` runtime module is provided by Workers | 2026-11-16 |
 
 ---
 
