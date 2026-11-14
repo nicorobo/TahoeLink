@@ -32,6 +32,11 @@ const S = [
     [s011, s110],
 ]
 
+const Z = [
+    [s01, s11, s10],
+    [s110, s011],
+]
+
 const flipx = (schema: number[][]) => schema.map(row => row.toReversed())
 const flipy = (schema: number[][]) => schema.toReversed()
 
@@ -54,4 +59,5 @@ export const shapes = {
     'T': buildShapes(T),
     'I': buildShapes(I),
     'S': buildShapes(S),
+    'Z': buildShapes(Z),
 } as const

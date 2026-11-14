@@ -174,12 +174,12 @@ seat; `bun run check` is clean; CI is green.
       overflow. Keep a thin throwing wrapper only if callers need it.
 - [x] **M1-3** Refactor `getUpdatedBoard` to use `tryPlacePiece`; preserve current correct
       gravity results. Document/enforce the "all shape columns have equal length" invariant.
-- [ ] **M1-4** Add `getLegalColumns(board, shape): number[]` for the UI and server.
-- [ ] **M1-5** Add `rollDie(rng: () => number): DiceValue` with an injectable RNG and the
+- [x] **M1-4** Add `getLegalColumns(board, shape): number[]` for the UI and server.
+- [x] **M1-5** Add `rollDie(rng: () => number): DiceValue` with an injectable RNG and the
       distribution: **I, O, T, L, S/Z (combined), TETRIS LINK** — 6 sides. Update the
       `DiceValue` type to reflect the combined S/Z face (e.g. `'S' | 'Z'` merged into one
       enum member, or keep both and map in `rollDie`).
-- [ ] **M1-6** Add `scoreBoard(board, playerId): PlayerScore` implementing the rules:
+- [x] **M1-6** Add `scoreBoard(board, playerId): PlayerScore` implementing the rules:
       - Groups of 3+ orthogonally adjacent pieces of the same colour score.
       - **First 3 pieces in a new group**: +1 each (+3 total).
       - **Each additional piece** added to a scored group: +1.
@@ -466,6 +466,8 @@ than silently choosing.
 | 11 | API base strategy | Env override vs hardcoded vs SSR-per-route | **`ssr = false` + Vite proxy + `/api` constant** | Simplest setup: browser always uses `/api`, Vite proxies to wrangler dev; env override for split deployments | 2026-11-14 |
 | 12 | Cookie Secure policy | Always true vs derived from header/env | **Derive from `X-Forwarded-Proto`; override via `COOKIE_SECURE` env** | Plain HTTP (localhost) works without browser warnings; production behind TLS auto-detects | 2026-11-14 |
 | 13 | Occupied-cell check in `tryPlacePiece` | Keep vs remove | **Keep as defense-in-depth** | The gravity algorithm places pieces above all obstructions (proven by the math: `y - 1 < height` for every column). An occupied-cell conflict cannot occur with contiguous board state. The check is kept as a safety invariant for corrupted states and future shape variants. | 2026-11-16 |
+| 14 | DiceValue type for combined S/Z face | Keep S & Z as separate shapes vs 'SZ' member | **Separate `Shape` type with S & Z; `DiceValue` has `'SZ'` member** | Clean separation: Shape represents all 6 geometric shapes (L, O, T, I, S, Z); DiceValue represents die faces (I, O, T, L, SZ, any). `legalShapesForDie` maps SZ→[S,Z] and any→all. | 2026-11-16 |
+| 15 | Scoring: no-piece-twice tracking | Set<string> vs Map<string,boolean> vs separate per-player table | **Set<string> inside PlayerScore** | O(1) lookup for scored-cell check; serialized as sorted string[] for determinism. Pure function model. | 2026-11-16 |
 
 ---
 

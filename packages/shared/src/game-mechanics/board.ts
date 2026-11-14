@@ -98,6 +98,26 @@ export function tryPlacePiece({
 }
 
 /**
+ * Returns all column indices where the given shape can be legally placed.
+ * Iterates columns 0..(BOARD_WIDTH-1) and calls `tryPlacePiece` for each.
+ * Returns columns where the piece fits entirely within bounds, no occupied cells,
+ * and no ceiling overflow.
+ */
+export function getLegalColumns(
+    board: Board,
+    shape: number[][]
+): number[] {
+    const columns: number[] = []
+    for (let col = 0; col + shape.length <= BOARD_WIDTH; col++) {
+        const result = tryPlacePiece({ board, column: col, shape, shapeId: 0 })
+        if (result !== null) {
+            columns.push(col)
+        }
+    }
+    return columns
+}
+
+/**
  * Thin throwing wrapper around `tryPlacePiece`.
  * Preserves the original API and gravity results for valid inputs.
  * Throws if the placement is invalid.
