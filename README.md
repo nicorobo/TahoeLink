@@ -119,6 +119,7 @@ cd packages/api && bunx tsc --noEmit     # typecheck API
 - [AGENTS.md](./AGENTS.md) — lean operating manual for coding agents
 - [PLAN.md](./PLAN.md) — roadmap, rules contract, defect backlog, task queue
 - [docs/HANDOFF.md](./docs/HANDOFF.md) — current state, last verified evidence, next task
+- [docs/VERIFICATION.md](./docs/VERIFICATION.md) — E2E harness design, determinism, spec map, triage
 - [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) — Cloudflare deployment options and migration plan
 - [.pi/skills/tahoe-verify/SKILL.md](./.pi/skills/tahoe-verify/SKILL.md) — verification playbook
 - [.pi/prompts/](./.pi/prompts/) — `/task`, `/verify`, `/handoff` agent commands

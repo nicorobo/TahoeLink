@@ -9,6 +9,11 @@ description: Verify TahoeLink changes. Run after a PLAN task, before committing,
 Read `AGENTS.md` §3 and `docs/HANDOFF.md` first. This skill is for observing and reporting;
 do not fix code unless the user asks.
 
+**Browser E2E does not exist yet.** The harness (`bun run test:e2e`) is planned in M4.6 and
+designed in `docs/VERIFICATION.md`. Until it lands, a UI change is only verified by a manual
+two-context pass plus the API/DO tests; say so explicitly instead of implying a green suite
+covers the browser.
+
 ## 0. Probe the environment
 
 ```bash
@@ -63,12 +68,16 @@ Expected as of the last handoff:
 
 | Check | Expected |
 | --- | --- |
-| `packages/app` check | 0 errors, 1 a11y warning (Board.svelte buttons) |
+| `packages/app` check | 0 errors, 0 warnings |
 | `packages/api` typecheck | clean |
 | `packages/shared` typecheck | clean |
-| `packages/shared` tests | 180+ pass (engine: placement, dice, scoring, supply, skip-turn) |
+| `packages/shared` tests | 182 pass (engine: placement, dice, scoring, supply, skip-turn) |
 | `packages/api` tests | 16 pass (DO lifecycle: create, join, start, turn, leave, WS) |
 | `packages/app` build | passes, with an `adapter-auto` warning (expected until M6-1) |
+| `bun run test:e2e` | **does not exist yet** (M4.6) — do not claim browser coverage |
+
+Green checks above do **not** prove the game is playable. M4 passed all of them while the
+first move blanked the page; see PLAN.md § M4.5 and D19–D29.
 
 If a failure differs from this baseline, it is likely new: report it with file:line.
 

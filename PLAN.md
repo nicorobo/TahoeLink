@@ -8,7 +8,13 @@ Use the agent commands from `.pi/prompts/`: `/task <id>` to implement one task, 
 for a verification pass, and `/handoff` to write the state back to `docs/HANDOFF.md`. One
 deliverable per session; one Pendant goal per milestone (when the user asks for it).
 
-Current state: **M0 complete** — Wrangler dev path works, checks pass, CI configured. Lobby join/leave works (needs Redis); game is not playable.
+Current state (2026-11-19): **M0–M4 are marked done, but the game is not playable.** M4 was
+closed on typecheck/build evidence only; no browser flow was ever exercised. A scripted
+two-client probe reproduced a UI crash on error responses, leaked seat identity to every
+client (both players render as red), never refreshed the lobby on join, never resumed a
+paused game, and announced the wrong winner. The queue below is **M4.5 (fix the loop) →
+M4.6 (verification harness) → M5 (UX/visual design) → M6 (deploy)**. Do not skip ahead:
+M4.5 is the only milestone that makes the product work.
 
 ---
 
@@ -343,28 +349,213 @@ Screens/components:
 - [x] **M4-12** Empty/edge states: unknown room, room full, game already started, room
       expired.
 
-**Acceptance:** the Definition of "playable" UI checklist passes on desktop and a 390 px
-viewport; Playwright drives a full 2-player game through the UI.
+> **Status: scaffolding, not playable.** The components and screens exist, but the
+> acceptance criteria below were never exercised. Session 13 signed M4 off with
+> `bun run check` and `bun run build` only, which is why D19–D29 shipped. M4.5 and M4.6
+> exist to close exactly this gap; do not treat the checkboxes above as evidence.
 
-**Verification:** `bun run build`; Playwright two-context E2E; manual keyboard-only run.
+**Acceptance (not met):** the Definition of "playable" UI checklist passes on desktop and a
+390 px viewport; Playwright drives a full 2-player game through the UI.
+
+**Verification (not performed):** `bun run build`; Playwright two-context E2E; manual
+keyboard-only run. Re-run all three after M4.5 and M4.6.
 
 ---
 
-### M5 — Playtest and polish (M)
+### M4.5 — Make M4 actually playable (P0 hardening) (M)
 
-- [ ] **M5-1** Play at least three real games with 2–4 humans; log every rules dispute.
-- [ ] **M5-2** Fix the top usability issues found; re-run the rules fixtures.
-- [ ] **M5-3** Room moderation: kick/close room, host transfer on leave, rematch.
-- [ ] **M5-4** Performance: recompute score only when needed; avoid re-rendering 100 cells
-      unnecessarily; measure DO duration/memory per room during idle periods.
-- [ ] **M5-5** Observability: structured logs (no session IDs), error reporting, basic
-      metrics (rooms created, games finished).
-- [ ] **M5-6** Browser matrix (Chrome/Safari/Firefox, iOS Safari) and a network-throttle pass
-      with WebSocket reconnect.
-- [ ] **M5-7** Finalize `.pi/skills/tahoe-rules` and keep it in sync with tests.
+**Why:** M4 shipped a game screen that was never driven by a human or a browser test. The
+client treats error bodies as state (one rejected move blanks/crashes the page), the state
+broadcast is built from the actor's session so every client adopts the actor's seat, the
+lobby never receives `seats`, a paused game can never resume, and the winner is off by one.
+Fix these before spending a minute on visual polish.
 
-**Acceptance:** no P0/P1 defects open; 10 consecutive scripted games complete; mobile
-playtest passes.
+**Goal:** two real browsers complete a game with no console errors, and every rejected
+action leaves the board, score, and turn untouched.
+
+- [ ] **M4.5-1** Fix identity on the wire. Use **0-based seats on the wire**; the engine's
+      1-based owner exists only inside `shared` calls. In `shared/src/events.ts`, replace
+      `playerId`/`playerPosition` with `youSeat: number | null` in `StatePayload`, expose
+      `scores`/`piecesRemaining` keyed by seat, and add `activeSeat`/`winnerSeat` (1-based
+      keys stay in DO storage only, decision 24). Stop
+      building one payload from the actor's session and broadcasting it
+      (`room-do.ts` `handleStart`/`handleLeave`/`handleTurn` call
+      `buildStatePayload(sessionId)` → `broadcast`): build a payload **per socket** from
+      `ws.deserializeAttachment().sessionId`. In `app/src/lib/events/index.ts` set
+      `playerState.playerId` only from `youSeat` and delete the `>= 0` fallback that lets a
+      broadcast overwrite identity. Update `+page.ts`, `+page.svelte`, `Board`, `StatusPanel`,
+      `PlayerSelectionScreen` and `PieceDisplay` to the new field.
+      *Acceptance:* a spectator stays `youSeat: null`; two seated clients each see their own
+      seat and only their own seat; `playerPosition` no longer exists.
+- [ ] **M4.5-2** Stop treating errors as state. Wrap `app/src/lib/api.ts` in one request
+      helper that throws `ApiError { code, message }` on `!res.ok` or an `{ error }` body;
+      add a `zValidator` `defaultHook` in `api/src/main.ts` so Zod failures return
+      `{ error: { code: 'INVALID_REQUEST', message } }` instead of the current
+      `{ success: false, error: { name: 'ZodError', … } }`. In `+page.svelte` route every
+      mutation through `try/catch` + `addToast`, and apply payloads through a single
+      `applyState(payload)` in `state.svelte.ts` that ignores missing fields. Add
+      `src/routes/+error.svelte`; keep the last good board on failure.
+      *Acceptance:* a 400/500 produces a toast, stage/board/turn are unchanged, and no
+      unhandled rejection reaches the console.
+- [ ] **M4.5-3** Fix snapshot and lobby sync. (a) `handleWebSocketUpgrade` must
+      `await this.ensureLoaded()` before `acceptWebSocket` and before the first snapshot
+      (today it is fire-and-forget, so a cold DO sends none). (b) `connected` must not seed
+      the stale-version gate in `app/src/lib/events/index.ts` — it makes the first snapshot
+      same-version, so it is always dropped. (c) Add a client→server `resync` message, sent
+      on open/reconnect and after a rejected mutation; reply with a personalized snapshot.
+      (d) Broadcast a full snapshot on join and leave in addition to
+      `player-joined`/`player-left`, and make those handlers merge `seats`/`stage` (today
+      seat cards never change until a reload).
+      *Acceptance:* with two browsers, a join updates the first browser's seat cards within
+      one second and the first connect to a fresh room receives a snapshot.
+- [ ] **M4.5-4** Enforce turn ownership in the UI. `Board.svelte` is clickable for everyone
+      and `PieceControl` is shown to every seated player. Derive
+      `isMyTurn = youSeat !== null && youSeat === activeSeat && stage === 'in-progress' && !pending`,
+      pass `disabled={!isMyTurn}`, and show a non-blocking "Player N's turn" line. Normalize
+      rotation in `PieceControl` (`rotation = (rotation + 4) % 4` on each mutation) and send
+      the normalized value in `makeMove` — today a rotate-left then click posts
+      `rotation: -1`, which Zod rejects. Add a `pending` guard so a double-click cannot fire
+      two turns.
+      *Acceptance:* a non-active player cannot reach `/turn` from the UI; ten rotate-lefts
+      still place a piece; two fast clicks produce one move.
+- [ ] **M4.5-5** Resume and reconnect. `handleJoin` allows joining a `paused` room but nothing
+      ever sets `stage` back to `in-progress`, so a paused game is dead. Resume when every
+      previously occupied seat is filled again, keeping `activePlayerId` valid. Also stop
+      freeing the seat the instant a socket closes: `webSocketClose` currently pauses the
+      game on F5. Schedule a ~30 s grace alarm per session and cancel it when any socket for
+      that session reconnects.
+      *Acceptance:* reload mid-game keeps seat, board, score and turn; a tab closed for
+      <30 s does not pause; the game resumes after a rejoin.
+- [ ] **M4.5-6** Key game state by seat, and map the winner back to a seat. `handleStart`
+      builds `scores`/`piecesRemaining` from join-order index (`i + 1`) instead of seat
+      (`playerIds[i] + 1`), so a room with seats 0 and 2 returns `NO_PIECES` forever.
+      `getWinner` returns a 1-based player ID while the UI prints `winner + 1` and colors
+      `PLAYER_COLORS[winner]`, announcing the wrong player. Give a replacement occupant of a
+      paused seat that seat's pieces and score (record it in the decisions log).
+      *Acceptance:* a game with seats 0 and 2 plays; the winner banner and its color match
+      the winning seat.
+- [ ] **M4.5-7** Return the actor's personalized snapshot from every mutation
+      (`buildStatePayload(sessionId)`) instead of `publicRoom()`, so the UI never depends on
+      broadcast ordering for scores, pieces, or winner. Delete the unused `turn-start` event
+      from `events.ts` (or emit it) so the wire contract has no dead entries.
+      *Acceptance:* with the WebSocket disconnected, a legal move still updates score, turn
+      and winner on screen.
+- [ ] **M4.5-8** Add API-level regression tests for each fix in
+      `packages/api/src/__tests__/room-do.test.ts`: two clients + spectator WS identity,
+      cold-start snapshot, join updates the lobby, start→turn→pause→resume→complete,
+      Zod error envelope, non-active move, gap-seat `NO_PIECES` case, winner-to-seat mapping.
+      Each test must fail against the current code and pass after its fix.
+
+**Acceptance:** two browser contexts create, join, start, play 10+ moves (rotate/flip/shape),
+refresh mid-game, and finish with the correct winner and zero console errors or unhandled
+rejections.
+
+**Verification:** manual two-context pass; `cd packages/api && bun test` with `wrangler dev`
+running; the browser-free two-client probe (`scripts/dev-play.ts`, M4.6-6) once it exists.
+
+---
+
+### M4.6 — Agent verification harness (M)
+
+**Goal:** one command tells an agent whether the game works end to end, and a failure
+leaves artifacts an agent can act on without a human. See `docs/VERIFICATION.md` for the
+design, selector contract, and triage loop.
+
+- [ ] **M4.6-1** Add `@playwright/test` at the repo root; `playwright.config.ts` with two
+      `webServer` entries (`cd packages/api && bunx wrangler dev --port 8787` waiting on
+      `/health`, and `cd packages/app && bun run dev` waiting on `:5173`), `trace:
+      'on-first-retry'`, `video: 'retain-on-failure'`, one chromium project plus a 390 px
+      viewport project. Root scripts `test:e2e`, `test:e2e:ui`. Document
+      `bunx playwright install chromium` (browsers are not installed on this machine yet).
+- [ ] **M4.6-2** Publish a selector contract: add `data-testid` to the board, each column,
+      each cell (`cell-<x>-<y>`), seat cards (`seat-<i>`), `you-are`, `roll`, `turn-indicator`,
+      `piece-control`, `score-<seat>`, `toast`, `paused-overlay`, `game-over`. Specs must use
+      test IDs, never Tailwind classes.
+- [ ] **M4.6-3** Deterministic dice for tests. Add a dev-only dice queue (env binding
+      `DICE_SEQUENCE`, e.g. `L,O,T,I,SZ,any`) consumed by `rollDie` in the DO, plus a
+      dev-only `POST /dev/room/:id/dice` that 404s unless `ENVIRONMENT === 'development'`.
+      Unit-test the queue and assert production rejects the endpoint.
+- [ ] **M4.6-4** Two-context fixture and core specs: `lobby.spec.ts` (create → invite link in
+      a second context → both see both seats and correct identities → start enables),
+      `turn.spec.ts` (start → non-active board/controls are disabled → rotate/flip → place →
+      both boards converge → turn advances), `errors.spec.ts` (illegal column keeps the page
+      alive and shows an actionable message).
+- [ ] **M4.6-5** `game.spec.ts`: play a full seeded game to completion, assert score deltas,
+      skip-turn visibility, winner identity/color, and the rematch/new-game path.
+- [ ] **M4.6-6** `scripts/dev-play.ts`: create → join two sessions → start → N seeded moves
+      over HTTP/WebSocket → print a board, scores, and turn summary; no browser required.
+      This is the fallback when Playwright browsers are unavailable.
+- [ ] **M4.6-7** Failure ergonomics: document where traces/videos land, add an `--reporter=list`
+      default, and extend `.pi/skills/tahoe-verify/SKILL.md` with the E2E matrix and a triage
+      section (which spec maps to which defect class).
+- [ ] **M4.6-8** CI: run `test:e2e` on pull requests with chromium only and a 10-minute cap;
+      keep the browser-free unit/API tests as the fast gate.
+
+**Acceptance:** from a clean checkout with browsers installed, `bun run test:e2e` drives two
+browser contexts through a full game and passes; reverting any single M4.5 fix makes its
+matching spec fail (verify once per fix and record it in the handoff).
+
+**Verification:** run the suite against the current code *before* the M4.5 fixes and record
+the expected red result, then again after; upload one artifact set.
+
+---
+
+### M5 — UX, visual design, and playtest (L)
+
+**Goal:** the game looks intentional, teaches itself, and is pleasant on a phone. Start only
+after M4.5 and M4.6 are green — polish on a broken loop hides regressions.
+
+- [ ] **M5-1** Design system. Define tokens in `packages/app/src/app.css` with Tailwind v4
+      `@theme`: player palette with checked text contrast (≥4.5:1), surface/border/text ramp,
+      radius, shadow, and motion durations. Replace the duplicated `PLAYER_COLORS` arrays in
+      `Board`, `StatusPanel`, `PlayerSelectionScreen`, and `PieceDisplay` with one
+      `playerColorClasses` helper.
+- [ ] **M5-2** Landing and join-by-code. Hero with the name, one-line pitch, "Create room",
+      and a "Join with code" input that routes to `/room/<code>`; support `?room=` deep links
+      and the native share sheet on mobile; keep the room code large and copyable.
+- [ ] **M5-3** Lobby redesign: four seat cards in the real player colors, "You" and "Host"
+      badges, join/leave per seat, spectator count, "Waiting for players (1/2)", and a
+      prominent invite action. Show which color you will play before starting.
+- [ ] **M5-4** Player names: `seats` become `(Seat | null)[]` with `{ sessionId, name }`;
+      `join` accepts an optional sanitized display name (≤16 chars, fallback "Player N");
+      migrate DO state on read; show names in the lobby, turn line, scores, and pause overlay.
+      This also removes the "Occupied/Empty" placeholder from decision 29.
+- [ ] **M5-5** Game layout: three zones on desktop (scores + turn | board | die, piece,
+      controls), board first on mobile with sticky controls. Render the die as a face (shape
+      glyph or "TETRIS LINK" badge), not a bare letter.
+- [ ] **M5-6** Board craft: rounded cells inside a framed board, subtle grid, ghost piece with
+      an outline, hovered-column highlight, last-placed-piece pulse, and a floating `+N` when
+      a move scores. All motion behind `motion-reduce`.
+- [ ] **M5-7** Turn clarity: "Your turn — place {shape}" vs "Waiting for Alice…", an
+      active-seat ring in the scoreboard, a disabled board that explains why, and a visible
+      line when your turn is skipped because the shape does not fit (R7).
+- [ ] **M5-8** Feedback: a compact event feed of the last three moves alongside toasts,
+      actionable error copy ("Column 4 is full — pick another"), toasts reserved for
+      connection loss, and de-duplication so one error yields one toast.
+- [ ] **M5-9** Onboarding: a "How to play" drawer with three steps (roll → place → score), a
+      first-turn hint pointing at die/piece/board, and the rules link; remember dismissal.
+- [ ] **M5-10** Keyboard and a11y: column cursor (arrow keys) with Enter to place, `Esc` to
+      cancel, focus moves to the board on your turn, visible focus rings, `aria-live` for turn
+      and score changes, and an axe-core scan with zero serious violations.
+- [ ] **M5-11** Responsive verification: Playwright screenshots at 360×640, 768×1024, and
+      1280×800; no horizontal scroll; 44 px touch targets.
+- [ ] **M5-12** Play at least three real games with 2–4 humans; log every rules dispute and
+      usability issue.
+- [ ] **M5-13** Room moderation: kick/close room, host transfer on leave, rematch in the same
+      room (reuse seats and colors), and leave-and-return without losing the score.
+- [ ] **M5-14** Performance and observability: recompute only the affected score, avoid
+      re-rendering all 100 cells per message, structured logs without session IDs, and metrics
+      for rooms created and games finished.
+- [ ] **M5-15** Browser matrix (Chrome/Safari/Firefox, iOS Safari) and a throttled-network
+      pass with WebSocket reconnect.
+- [ ] **M5-16** Finalize `.pi/skills/tahoe-rules` and keep it in sync with the engine tests.
+
+**Acceptance:** the M4.5 browser flow stays green after every task; lobby, board, and turn
+state are readable at a glance; a first-time player can start a game without being told what
+to click; no P0/P1 defects open; 10 consecutive scripted games complete.
+
+**Verification:** `bun run test:e2e`, screenshot diffs, the axe scan, and three human
+playtests.
 
 ---
 
@@ -410,7 +601,22 @@ backlog.
 | D15 | P1 | `REDIS_URL` ignored | — (deleted; Redis removed in M2) |
 | D16 | P1 | No tests/CI | M0-8 ✅, M1-9 |
 | D17 | P2 | Cell encoding breaks at turn 1000 | M1-8 |
-| D18 | P2 | Session IDs logged; CORS wide open; stale docs | M5-5, M6-3 |
+| D18 | P2 | Session IDs logged; CORS wide open; stale docs | M5-14, M6-3 |
+| D19 | P0 | A rejected move assigns `undefined` to the board (error body treated as state) and crashes the page | M4.5-2 |
+| D20 | P0 | Broadcast state is built from the actor's session, so every client adopts the actor's seat (both players render red) | M4.5-1 |
+| D21 | P0 | First WS snapshot is dropped by the version gate; a cold DO sends no snapshot at all | M4.5-3 |
+| D22 | P0 | Join/leave broadcast only `playerIds`; lobby seats and stage never update until reload | M4.5-3 |
+| D23 | P0 | Rotate-left posts `rotation: -1`, Zod rejects it, the response blanks the page | M4.5-4 |
+| D24 | P0 | Winner is 1-based but displayed as `winner + 1`, so the wrong player is announced | M4.5-6 |
+| D25 | P0 | A paused room never returns to `in-progress`; a rejoin cannot resume | M4.5-5 |
+| D26 | P0 | Scores/supply keyed by join order, not seat; a gap-seat room returns `NO_PIECES` | M4.5-6 |
+| D27 | P1 | WebSocket close frees the seat immediately, so F5 pauses the game | M4.5-5 |
+| D28 | P1 | Board and controls stay enabled for the non-active player | M4.5-4 |
+| D29 | P1 | Zod failures return `{ success, error: { name } }`, not the documented `{ error: { code, message } }` | M4.5-2 |
+| D30 | P1 | No E2E harness; M4 was signed off on typecheck/build alone | M4.6 |
+| D31 | P1 | No join-by-code UI; a player with the code must edit the URL | M5-2 |
+| D32 | P1 | Keyboard can rotate but cannot select a column or place a piece | M5-10 |
+| D33 | P2 | Player color map duplicated in four components and diverges from the board encoding | M5-1 |
 
 ### P1/P2 details
 
@@ -428,30 +634,46 @@ backlog.
 | D16 | No tests, CI, or lint/format script | repo |
 | D17 | Cell encoding `playerId + turn*0.001` breaks at turn 1000 and conflates owner/turn | `api/src/main.ts:111` (will be in DO state in M3) |
 | D18 | Session IDs logged; CORS wide open; stale `README.Docker.md`; stray `shared/bun.lock` | `api/src/broadcasting/*` (deleted in M2), `app/README.Docker.md` |
+| D19 | `makeMove` does `roomState.board = res.board` without checking `res.ok`; a 400 body has no `board`/`stage`, so `{#each board}` throws and the stage conditionals all fail | `app/src/routes/room/[roomId]/+page.svelte` (`makeMove`), `app/src/lib/api.ts` |
+| D20 | `handleStart`/`handleLeave`/`handleTurn` call `buildStatePayload(sessionId)` and then `broadcast()` that one payload, including `playerId`/`playerPosition`; the client applies `playerPosition` whenever it is `>= 0` | `api/src/durable-objects/room-do.ts`, `app/src/lib/events/index.ts` |
+| D21 | `handleWebSocketUpgrade` calls `this.ensureLoaded()` without `await`; and `connected` sets `lastStateVersion`, so the immediately following same-version `state` is ignored | `room-do.ts` (upgrade), `app/src/lib/events/index.ts` |
+| D22 | `handleJoin` broadcasts `player-joined` with `{ playerIds }` only; `player-joined`/`player-left` handlers never touch `roomState.seats` | `room-do.ts` (join/leave), `app/src/lib/events/index.ts` |
+| D23 | `PieceControl.rotateLeft` decrements with no normalization; `makeMove` forwards `pieceState.rotation` verbatim; route schema is `min(0).max(3)` | `app/src/lib/components/PieceControl.svelte`, `+page.svelte`, `api/src/main.ts` |
+| D24 | `getWinner` returns a 1-based engine player ID; the DO stores it as `winner`; UI prints `Player {winner + 1}` and indexes `PLAYER_COLORS[winner]` | `api/src/durable-objects/room-do.ts`, `+page.svelte`, `StatusPanel.svelte` |
+| D25 | Only `handleStart` sets `in-progress`; `handleJoin` accepts `paused` but never flips the stage back | `room-do.ts` |
+| D26 | `handleStart` loops `i` over `playerIds` and uses `pid = i + 1` instead of `playerIds[i] + 1` | `room-do.ts` (`handleStart`) |
+| D27 | `webSocketClose` frees the seat and sets `paused` on the last socket close; a reload is indistinguishable from leaving | `room-do.ts` (`webSocketClose`) |
+| D28 | `<Board>` gets no `disabled` prop and `PieceControl` renders for any seated player regardless of `activePlayer` | `+page.svelte`, `Board.svelte`, `PieceControl.svelte` |
+| D29 | `zValidator` has no `defaultHook`; its failure body is `{ success: false, error: { name: 'ZodError', message: '<json>' } }` | `api/src/main.ts` |
+| D30 | `packages/app` has no test runner and no Playwright dependency; AGENTS baseline is typecheck + build only | repo |
+| D31 | Home page only offers `Create Room`; the room code is displayed but has no input path | `app/src/routes/+page.svelte` |
+| D32 | `PieceControl` handles arrows/R/F/digits; there is no column cursor, Enter, or board focus | `app/src/lib/components/PieceControl.svelte`, `Board.svelte` |
+| D33 | `PLAYER_COLORS` is re-declared in `Board`, `StatusPanel`, `PlayerSelectionScreen`, `PieceDisplay`; `getCellBackgroundClass` holds a fifth copy | `app/src/lib/utils/color.ts` and components |
 
 ---
 
-## First agent session (recommended order)
+## Next sessions (current queue)
 
-Run each as a separate session with `/task <id>`, one commit per green task:
+Run each as its own session with `/task <id>`, one commit per green task. Stop after each
+session, run `/verify`, review the diff, and run `/handoff` before continuing.
 
-1. `/task M0-5` (typecheck) — small win, unblocks CI.
-2. `/task M0-1`, `/task M0-2`, `/task M0-3`, `/task M0-4` (Wrangler dev path) — verify
-   create/join/refresh in two browsers at the end.
-3. `/task M0-6`, `/task M0-9` (scripts + smoke test).
-4. `/task M0-8` (CI).
-5. `/task M1-2`, `/task M1-3` (safe placement + tests) — highest-value correctness fix.
-6. `/task M1-4` (legal columns) — feeds the UI and server.
-7. `/task M1-5`, `/task M1-6`, `/task M1-7`, `/task M1-9`, `/task M1-10`, `/task M1-11`,
-   `/task M1-12`, `/task M1-13`, `/task M1-14` (dice, scoring, supply, turn-skip,
-   blocked-groups, S/Z penalty, 2-player) — rules are confirmed in `docs/GAME_RULES.md`,
-   so no waiting needed. Group by dependency: dice first, then scoring, then turn-skip.
-8. `/task M2-1` … `/task M2-6` (DO foundation) — wire room DO, WebSocket, remove Redis.
-9. `/task M3-1` … `/task M3-9` (full state machine on DO).
-10. `/task M4-3` … `/task M4-7` (game screen) — after the DO server is complete.
+1. **Stop the bleeding:** `/task M4.5-2` (error handling, no more crash) and
+   `/task M4.5-4` (turn gating + normalized rotation).
+2. **Identity and sync:** `/task M4.5-1` (wire seats + per-socket payload) and
+   `/task M4.5-3` (snapshot, join/leave sync, `resync`). Do them in one session — both
+   change the payload type.
+3. **Game mechanics of the loop:** `/task M4.5-6` (seat keys, winner mapping),
+   `/task M4.5-5` (resume + disconnect grace), `/task M4.5-7` (mutation snapshots).
+4. **Lock it down:** `/task M4.5-8` (API regression tests). M4.5 is done only with a
+   two-browser pass recorded in the handoff.
+5. **Build the net:** `/task M4.6-1` … `/task M4.6-7`. Run the suite against the unfixed
+   code first if possible and record the red baseline.
+6. **Design:** `/task M5-1` … `/task M5-11` in order (tokens first, then landing/lobby, then
+   board/game layout, then a11y), then `/task M5-12` (human playtest).
+7. **Finish:** `/task M5-13` … `/task M5-16`, then M6 deploy.
 
-Stop after each session, run `/verify`, review the diff, and run `/handoff` before
-continuing.
+Do not start M5 before M4.6 exists. Visual work without an E2E net is how M4 was declared
+complete while the game crashed on the first move.
 
 ---
 
@@ -496,6 +718,16 @@ than silently choosing.
 | 33 | Board responsive scaling | `max-sm:w-8 max-sm:h-8` vs `overflow-auto` scrollable container vs CSS `scale()` transform | **Both: `max-w-full overflow-auto` container + `max-sm:w-8 max-sm:h-8` cells** | Two-layer approach: outer container prevents horizontal overflow on any screen; smaller cells (32px → 320px board) on sub-640px viewports ensure fit in 360px. `overflow-auto` handles edge cases where content still exceeds viewport. | 2026-11-18 |
 | 34 | Colorblind indicator in cells | Small number text vs icon/symbol vs pattern overlay | **Small owner number (`<span class="text-[10px] text-black/60">`)** | Cells are 40×40px (32px on mobile), too small for patterns or initials. A translucent number overlays the colored background without obscuring it, readable against all 4 player colors. | 2026-11-18 |
 | 35 | Reduced-motion strategy | CSS `@media (prefers-reduced-motion)` vs Tailwind `motion-reduce:` prefix | **Tailwind `motion-reduce:` prefix** | Tailwind v4 natively supports `motion-reduce:` variant prefix that applies classes only when the user's OS accessibility setting requests reduced motion. Cleaner than manual media queries. | 2026-11-18 |
+| 36 | Seat ID convention on the wire | Mixed (some payloads 0-based, some 1-based) vs 0-based everywhere vs seat objects | **0-based seats in every payload** (`youSeat`, `activeSeat`, `winnerSeat`, seat-keyed `scores`/`piecesRemaining`); DO storage keeps 1-based engine keys per decision 24 | Every M4 identity bug came from mixing the two. One conversion at the payload builder is testable; `youSeat` replaces the ambiguous `playerId`/`playerPosition` pair, and `winnerSeat` removes the off-by-one in the UI. | 2026-11-19 |
+| 37 | Broadcast personalization | One shared payload with viewer fields (current) vs per-socket payloads vs viewer fields only in direct messages | **Per-socket payload built from the socket's attached session** | Four players plus a few tabs is a trivial fanout; it removes the class of bugs where a client adopts the actor's seat, and keeps one code path for snapshots and broadcasts. | 2026-11-19 |
+| 38 | Error envelope for validation | Zod default body vs custom `defaultHook` | **`{ error: { code: 'INVALID_REQUEST', message } }` from a `zValidator` hook** | Matches decision 21 and the client's `ApiError`; no parser-dependent shapes reach the UI. | 2026-11-19 |
+| 39 | Client recovery strategy | Infer staleness from versions vs explicit `resync` | **Explicit `resync` message on open/reconnect/after a rejected mutation** | Version comparison plus one global counter already dropped the first snapshot; an explicit request is unambiguous and cheap. | 2026-11-19 |
+| 40 | Disconnect handling | Free the seat on socket close vs grace period vs explicit leave only | **~30 s grace alarm, cancelled by any reconnect; explicit Leave frees immediately** | A reload is a normal action; pausing the game on F5 makes the game unplayable. Grace keeps crash recovery without zombie seats. | 2026-11-19 |
+| 41 | Deterministic dice for tests | Seed the whole RNG vs dev-only dice queue vs mock the module | **Dev-only dice queue binding + `POST /dev/room/:id/dice`, 404 outside development** | Full-game E2E needs known rolls; a queue is reviewable, leaves `rollDie` pure, and cannot exist in production. | 2026-11-19 |
+| 42 | E2E tool | Manual two-browser checks vs Playwright vs MCP browser | **Playwright `@playwright/test`, two isolated contexts** | Reproducible, runs headless in CI, gives traces/screenshots as agent-readable artifacts, and needs no desktop interaction. | 2026-11-19 |
+| 43 | E2E selector strategy | Tailwind classes vs text vs `data-testid` | **`data-testid` contract documented in `docs/VERIFICATION.md`** | Class names change during the M5 design pass; test IDs keep the suite stable through a redesign. | 2026-11-19 |
+| 44 | Ownership of a re-filled seat | Reset the seat's score/supply vs inherit it | **The replacement occupant inherits the seat's score and remaining pieces** | Keeps scoring continuous and matches shared-colour 2-player rules; resetting would corrupt the board's owner encoding for cells already placed. | 2026-11-19 |
+| 45 | Design token location | Inline per-component colors vs Tailwind v4 `@theme` in `app.css` | **`@theme` tokens plus one `playerColorClasses` helper** | Tailwind v4 supports tokens natively; one source of truth for the four player colors, used by both the board encoding and the UI legend. | 2026-11-19 |
 
 ---
 

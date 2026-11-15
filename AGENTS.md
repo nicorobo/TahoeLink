@@ -21,7 +21,8 @@ TypeScript, `api` is Hono + Durable Objects, `app` is SvelteKit (Svelte 5) + Tai
 1. `cd packages/app && bun run check` passes.
 2. `cd packages/shared && bun test` passes; engine behavior has tests.
 3. No new browser console errors or server stack traces in the affected flow.
-4. The flow was exercised end-to-end (two browser contexts for multiplayer).
+4. The flow was exercised end-to-end (two browser contexts for multiplayer) and, once M4.6
+   lands, `bun run test:e2e` passes. Typecheck output alone is **not** evidence.
 5. `PLAN.md` checkboxes and the decisions log are updated.
 6. `docs/HANDOFF.md` reflects what changed, what was verified, and what is next.
 7. No unrelated refactors, formatting churn, or dependency additions.
@@ -58,6 +59,11 @@ cd packages/api && bun test             # DO lifecycle tests (needs wrangler dev
 Current baseline: all typechecks pass; shared 182 tests pass; API lifecycle tests pass
 (start wrangler dev first). macOS has no GNU `timeout`; use a background terminal or
 `perl -e 'alarm shift; exec @ARGV' 10 ...`.
+
+**Not available yet:** browser E2E. `docs/VERIFICATION.md` defines the harness built in
+M4.6 (`bun run test:e2e`); until then, every UI claim needs a manual two-context pass or
+`scripts/dev-play.ts` (M4.6-6). The API/DO tests are the only automated guard for the wire
+contract.
 
 Probes:
 
@@ -133,7 +139,9 @@ Full backlog, including P1/P2, is in `PLAN.md` § Defect backlog.
 | Placement throws past the right edge; ceiling overflow silently loses cells | `shared/src/game-mechanics/board.ts` | Fixed in M1-2 (tryPlacePiece) |
 | No turn ownership, dice roll, shape validation, or active-player advance | DO `handleTurn` | M3-5 target |
 | No scoring, piece supply, end condition, or winner on server | DO state (engine done in shared) | M3-5 target |
-| No game UI; board/piece components unused | `app/src/routes/room/[roomId]/+page.svelte` | M4 target |
+| No game UI; board/piece components unused | `app/src/routes/room/[roomId]/+page.svelte` | Built in M4, **broken end-to-end** |
+| M4 loop defects: error body assigned as state, seat identity leaked in broadcasts, lobby never syncs, paused games never resume, winner off by one | `room-do.ts`, `app/src/lib/**` | **M4.5 target** — PLAN D19–D29 |
+| No browser/E2E verification; M4 was signed off on typecheck and build only | repo | **M4.6 target** — see `docs/VERIFICATION.md` |
 | Room mutation not atomic | `api/src/models/room.ts` (deleted) | **Resolved** — DO single-writer |
 | No Vite `/api` proxy; SSR hardcodes `http://api:3000` | M0-1 | **Resolved** |
 | Always-`Secure` cookie for plain HTTP | M0-2 | **Resolved** |
