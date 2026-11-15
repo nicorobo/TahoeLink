@@ -62,6 +62,15 @@ app.onError((err, c) => {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Shared hook for Zod validation errors — returns the standard error envelope. */
+const zodHook = (result: any, c: any) => {
+  if (!result.success) {
+    const message =
+      result.error.issues?.[0]?.message ?? result.error.message ?? 'Invalid request'
+    return c.json({ error: { code: 'INVALID_REQUEST', message } }, 400)
+  }
+}
+
 function roomStub(env: Env['Bindings'], roomId: string): DurableObjectStub {
   const id = env.ROOMS.idFromName(roomId)
   return env.ROOMS.get(id)
@@ -148,7 +157,7 @@ app.get('/room/:roomId', async (c) => {
 
 app.post(
   '/room/:roomId/join',
-  zValidator('json', z.object({ playerId: z.number().optional() })),
+  zValidator('json', z.object({ playerId: z.number().optional() }), zodHook),
   async (c) => {
     const { roomId } = c.req.param()
     const sessionId = c.get('sessionId')
@@ -199,6 +208,7 @@ app.post(
       rotation: z.number().int().min(0).max(3),
       flip: z.boolean(),
     }),
+    zodHook,
   ),
   async (c) => {
     const { roomId } = c.req.param()

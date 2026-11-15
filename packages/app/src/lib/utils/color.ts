@@ -1,5 +1,5 @@
 
-const COLORS = {
+export const COLORS = {
     background: ['bg-red-400', 'bg-blue-400', 'bg-amber-400', 'bg-green-400']
 } as const
 

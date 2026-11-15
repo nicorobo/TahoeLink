@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { api } from '$lib/api'
+  import { api, ApiError } from '$lib/api'
   import { page } from '$app/state'
   import { onMount, onDestroy } from 'svelte'
   import { goto } from '$app/navigation'
-  import { pieceState, playerState, roomState } from '$lib/state.svelte'
+  import { pieceState, playerState, roomState, applyState } from '$lib/state.svelte'
+  import { addToast } from '$lib/toast.svelte'
   import { eventHandlers } from '$lib/events'
   import PlayerSelectionScreen from '$lib/components/PlayerSelectionScreen.svelte'
   import Board from '$lib/components/Board.svelte'
@@ -15,6 +16,14 @@
 
   let roomId = $derived(page.params.roomId)
   let adjustedRotation = $derived(((pieceState.rotation % 4) + 4) % 4)
+  let pending = $state(false)
+
+  let isMyTurn = $derived(
+    roomState.youSeat !== null
+    && roomState.youSeat === roomState.activeSeat
+    && roomState.stage === 'in-progress'
+    && !pending
+  )
   let currentShape = $derived(getShape({ shape: pieceState.shape, rotation: adjustedRotation, flip: pieceState.flip }))
   let legalCols = $derived(getLegalColumns(roomState.board, currentShape))
   let legalShapes = $derived(legalShapesForDie(roomState.roll))
@@ -26,52 +35,77 @@
   let connectionStatus = $state<'connected' | 'disconnected' | 'reconnecting'>('disconnected')
 
   $effect(() => {
-    // If there's a load error or no room data, skip populating room state
-    if (data.loadError || !data.room) {
+    // If there's a load error, skip populating room state
+    if (data.loadError || !data.board) {
       loadError = true
       loadErrorMessage = data.loadErrorMessage ?? 'Room not found'
       return
     }
     loadError = false
-    roomState.roll = data.room.roll
-    roomState.turn = data.room.turn
-    roomState.board = data.room.board
-    roomState.stage = data.room.stage
-    roomState.activePlayer = data.room.activePlayer
+    roomState.board = data.board
+    roomState.turn = data.turn
+    roomState.roll = data.roll
+    roomState.stage = data.stage
+    roomState.activeSeat = data.activeSeat
     roomState.seats = data.seats!
     roomState.scores = data.scores ?? {}
-    roomState.winner = data.winner ?? null
+    roomState.winnerSeat = data.winnerSeat ?? null
     roomState.piecesRemaining = data.piecesRemaining ?? {}
-    playerState.playerId = data.playerId!
-    playerState.playerIds = data.playerIds!
+    roomState.youSeat = data.youSeat ?? null
   })
 
   const makeMove = async (column: number) => {
-    const res = await api.makeMove({
-      roomId: roomId ?? '',
-      column,
-      shape: pieceState.shape,
-      rotation: pieceState.rotation,
-      flip: pieceState.flip,
-    })
-    roomState.roll = res.roll
-    roomState.turn = res.turn
-    roomState.board = res.board
-    roomState.stage = res.stage
-    roomState.activePlayer = res.activePlayer
+    if (pending) return
+    pending = true
+    try {
+      const res = await api.makeMove({
+        roomId: roomId ?? '',
+        column,
+        shape: pieceState.shape,
+        rotation: adjustedRotation,
+        flip: pieceState.flip,
+      })
+      applyState(res)
+    } catch (e) {
+      if (e instanceof ApiError) {
+        addToast(e.message, 'error')
+      } else {
+        addToast('Unexpected error', 'error')
+        console.error(e)
+      }
+    } finally {
+      pending = false
+    }
   }
 
   const onCreateNewRoom = async () => {
-    const { roomId: newRoomId } = await api.createRoom()
-    goto(`/room/${newRoomId}`)
+    try {
+      const { roomId: newRoomId } = await api.createRoom()
+      goto(`/room/${newRoomId}`)
+    } catch (e) {
+      if (e instanceof ApiError) {
+        addToast(e.message, 'error')
+      } else {
+        addToast('Unexpected error', 'error')
+        console.error(e)
+      }
+    }
   }
 
   const onLeave = async () => {
-    const res = await api.leaveRoom({
-      roomId: roomId ?? '',
-    })
-    playerState.playerId = null
-    playerState.playerIds = res.playerIds
+    try {
+      const res = await api.leaveRoom({
+        roomId: roomId ?? '',
+      })
+      roomState.youSeat = null
+    } catch (e) {
+      if (e instanceof ApiError) {
+        addToast(e.message, 'error')
+      } else {
+        addToast('Unexpected error', 'error')
+        console.error(e)
+      }
+    }
   }
 
   const copyInviteLink = async () => {
@@ -98,6 +132,7 @@
     ws.onopen = () => {
       connectionStatus = 'connected'
       console.log('WebSocket connected to room', roomId)
+      ws!.send(JSON.stringify({ event: 'resync' }))
     }
     
     ws.onmessage = (event) => {
@@ -200,7 +235,7 @@
 {:else if roomState.stage === 'in-progress' || roomState.stage === 'paused' || roomState.stage === 'complete'}
   <div class="flex flex-col md:flex-row gap-2 md:gap-4 p-2 md:p-4 items-start max-w-full">
     <!-- Board -->
-    <Board board={roomState.board} shape={currentShape} legalColumns={legalCols} playerId={playerState.playerId} onClick={(col: number) => makeMove(col)} />
+    <Board board={roomState.board} shape={currentShape} legalColumns={legalCols} playerId={roomState.youSeat} onClick={(col: number) => makeMove(col)} disabled={!isMyTurn} />
 
     <!-- Control panel -->
     <div class="flex flex-col gap-2 md:gap-4">
@@ -208,19 +243,23 @@
       <StatusPanel />
 
       <!-- Current piece -->
-      <PieceDisplay playerId={playerState.playerId ?? 0} />
+      <PieceDisplay playerId={roomState.youSeat ?? 0} />
 
       <!-- Piece controls (only for seated players) -->
-      {#if playerState.playerId !== null}
-        <PieceControl {legalShapes} />
+      {#if roomState.youSeat !== null}
+        <PieceControl {legalShapes} disabled={!isMyTurn} />
       {:else}
         <p class="text-sm text-gray-500 italic">Spectating — join a seat to play</p>
       {/if}
 
+      {#if !isMyTurn && roomState.youSeat !== null && roomState.stage === 'in-progress'}
+        <p class="text-sm text-gray-500 italic">Waiting for Player {roomState.activeSeat! + 1}&#8230;</p>
+      {/if}
+
       <!-- Leave button -->
       <div class="flex items-center gap-2 text-sm mt-2">
-        {#if playerState.playerId !== null}
-          <span class="font-medium">You are Player {playerState.playerId + 1}</span>
+        {#if roomState.youSeat !== null}
+          <span class="font-medium">You are Player {roomState.youSeat + 1}</span>
           <button
             onclick={onLeave}
             class="text-xs px-2 py-1 rounded border border-gray-400 hover:bg-gray-100 cursor-pointer">
@@ -267,12 +306,12 @@
       <div class="bg-white rounded-xl shadow-2xl p-8 max-w-md w-full mx-4 text-center">
         <h2 class="text-2xl font-bold mb-4">Game Over!</h2>
 
-        {#if roomState.winner !== null && roomState.winner >= 0}
+        {#if roomState.winnerSeat !== null && roomState.winnerSeat >= 0}
           <div class="flex items-center justify-center gap-2 mb-4">
-            <span class="inline-block w-5 h-5 rounded-full {['bg-red-400', 'bg-blue-400', 'bg-amber-400', 'bg-green-400'][Math.min(roomState.winner, 3)]}"></span>
-            <span class="text-xl font-semibold">Player {roomState.winner + 1} wins!</span>
+            <span class="inline-block w-5 h-5 rounded-full {['bg-red-400', 'bg-blue-400', 'bg-amber-400', 'bg-green-400'][Math.min(roomState.winnerSeat, 3)]}"></span>
+            <span class="text-xl font-semibold">Player {roomState.winnerSeat + 1} wins!</span>
           </div>
-        {:else if roomState.winner === -1}
+        {:else if roomState.winnerSeat === -1}
           <p class="text-xl font-semibold mb-4">It's a tie!</p>
         {:else}
           <p class="text-xl font-semibold mb-4">Game Over</p>
@@ -282,13 +321,12 @@
         <div class="border-t border-gray-200 pt-3 mt-2 mb-4">
           <p class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Final Scores</p>
           {#each roomState.seats as seat, seatIdx}
-            {@const pid = seatIdx + 1}
-            {@const score = roomState.scores[pid] ?? 0}
+            {@const score = roomState.scores[seatIdx] ?? 0}
             {#if seat !== null}
               <div class="flex items-center justify-between gap-2 text-sm">
                 <div class="flex items-center gap-2">
                   <span class="inline-block w-3 h-3 rounded-full {['bg-red-400', 'bg-blue-400', 'bg-amber-400', 'bg-green-400'][Math.min(seatIdx, 3)]}"></span>
-                  <span>Player {pid}</span>
+                  <span>Player {seatIdx + 1}</span>
                 </div>
                 <span class="font-mono font-bold">{score} pts</span>
               </div>
@@ -299,8 +337,17 @@
         <!-- New Game button -->
         <button
           onclick={async () => {
-            const { roomId: newRoomId } = await api.createRoom()
-            goto(`/room/${newRoomId}`)
+            try {
+              const { roomId: newRoomId } = await api.createRoom()
+              goto(`/room/${newRoomId}`)
+            } catch (e) {
+              if (e instanceof ApiError) {
+                addToast(e.message, 'error')
+              } else {
+                addToast('Unexpected error', 'error')
+                console.error(e)
+              }
+            }
           }}
           class="px-6 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 cursor-pointer">
           New Game

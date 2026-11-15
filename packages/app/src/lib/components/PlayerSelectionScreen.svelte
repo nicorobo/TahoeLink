@@ -1,17 +1,17 @@
 <script lang="ts">
   import { page } from '$app/state'
-  import { api } from '$lib/api'
+  import { api, ApiError } from '$lib/api'
   import { addToast } from '$lib/toast.svelte'
   import { playerState, roomState } from '$lib/state.svelte'
-  import { getCellBackgroundClass } from '$lib/utils/color'
+  import { COLORS } from '$lib/utils/color'
   import { MIN_PLAYERS } from '@tahoelink/shared'
 
   let roomId = $derived(page.params.roomId)
   const slots = [0, 1, 2, 3]
 
   // Derive lobby state
-  let occupiedCount = $derived(playerState.playerIds.length)
-  let isSeated = $derived(playerState.playerId !== null)
+  let occupiedCount = $derived(roomState.seats.filter(s => s !== null).length)
+  let isSeated = $derived(roomState.youSeat !== null)
   let canStart = $derived(occupiedCount >= MIN_PLAYERS && isSeated && roomState.stage === 'waiting-for-players')
 
   // Per-seat state helpers (used in template)
@@ -20,7 +20,7 @@
   }
 
   const isCurrentPlayerSeat = (seatIndex: number): boolean => {
-    return playerState.playerId === seatIndex
+    return roomState.youSeat === seatIndex
   }
 
   const onJoin = async (requestedPlayerId: number) => {
@@ -39,25 +39,45 @@
         addToast(msg, 'error')
         return
       }
-      playerState.playerId = res.playerId
-      playerState.playerIds = res.playerIds
+      roomState.youSeat = res.youSeat
+      playerState.playerId = res.youSeat
     } catch (e) {
-      addToast('Could not connect to server', 'error')
+      if (e instanceof ApiError) {
+        addToast(e.message, 'error')
+      } else {
+        addToast('Could not connect to server', 'error')
+      }
     }
   }
 
   const onLeave = async () => {
-    const res = await api.leaveRoom({
-      roomId: roomId ?? '',
-    })
-    playerState.playerId = null
-    playerState.playerIds = res.playerIds
+    try {
+      const res = await api.leaveRoom({
+        roomId: roomId ?? '',
+      })
+      roomState.youSeat = null
+      playerState.playerId = null
+    } catch (e) {
+      if (e instanceof ApiError) {
+        addToast(e.message, 'error')
+      } else {
+        addToast('Could not connect to server', 'error')
+      }
+    }
   }
 
   const onStartGame = async () => {
-    await api.startGame({
-      roomId: roomId ?? '',
-    })
+    try {
+      await api.startGame({
+        roomId: roomId ?? '',
+      })
+    } catch (e) {
+      if (e instanceof ApiError) {
+        addToast(e.message, 'error')
+      } else {
+        addToast('Could not connect to server', 'error')
+      }
+    }
   }
 </script>
 
@@ -71,7 +91,7 @@
     {#each slots as id}
       {@const occupied = isOccupied(id)}
       {@const currentSeat = isCurrentPlayerSeat(id)}
-      {@const colorClass = getCellBackgroundClass(id)}
+      {@const colorClass = COLORS.background[Math.min(id, 3)]}
       {@const seatLabel = occupied ? 'Occupied' : 'Empty'}
 
       <div

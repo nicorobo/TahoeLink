@@ -1,17 +1,18 @@
-import { browser } from '$app/environment'
+import type { Board, DiceValue, RoomStage } from '@tahoelink/shared'
 import type { PageLoad } from "./$types"
-import type { Room } from "@tahoelink/shared"
 
 export const ssr = false
 
 interface GetRoomResponse {
-    room: Room
-    playerIds: number[]
-    playerPosition: number
-    playerId: number | null
+    board: Board
     seats: (string | null)[]
+    youSeat: number | null
+    activeSeat: number | null
+    turn: number
+    roll: DiceValue
+    stage: RoomStage
     scores: Record<number, number>
-    winner: number | null
+    winnerSeat: number | null
     piecesRemaining: Record<string, Record<string, number>>
     stateVersion: number
 }

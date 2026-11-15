@@ -1,4 +1,4 @@
-import type { Board, DiceValue, RoomStage, Room } from "./types"
+import type { Board, DiceValue, RoomStage } from "./types"
 
 export type ConnectedPayload = {
     roomId: string
@@ -6,23 +6,18 @@ export type ConnectedPayload = {
 }
 
 /** Full state snapshot sent on WebSocket connect and after mutations. */
-export type StatePayload = Room & {
-    seats: (string | null)[]
-    playerIds: number[]
-    playerPosition: number
-    playerId: number | null
-    scores: Record<number, number>
-    winner: number | null
-    piecesRemaining: Record<string, Record<string, number>>
-    stateVersion: number
-}
-
-export type TurnStartPayload = {
+export type StatePayload = {
     board: Board
-    activePlayer: number
+    seats: (string | null)[]
+    youSeat: number | null
+    activeSeat: number | null
     turn: number
     roll: DiceValue
     stage: RoomStage
+    scores: Record<number, number>
+    winnerSeat: number | null
+    piecesRemaining: Record<string, Record<string, number>>
+    stateVersion: number
 }
 
 export type PlayerJoinedPayload = {
@@ -51,7 +46,6 @@ export type ErrorPayload = {
 export interface EventPayloadMap {
     'connected': ConnectedPayload
     'state': StatePayload
-    'turn-start': TurnStartPayload
     'player-joined': PlayerJoinedPayload
     'player-left': PlayerLeftPayload
     'game-over': GameOverPayload

@@ -75,8 +75,7 @@ describe("Room DO lifecycle", () => {
     expect(body.room.stage).toBe("waiting-for-players")
     expect(body.room.turn).toBe(0)
     expect(body.seats).toEqual([null, null, null, null])
-    expect(body.playerIds).toEqual([])
-    expect(body.playerId).toBeNull()
+    expect(body.youSeat).toBeNull()
   })
 
   // -----------------------------------------------------------------------
@@ -89,15 +88,14 @@ describe("Room DO lifecycle", () => {
       body: {},
     })
     expect(res.status).toBe(200)
-    expect(body.playerId).toBe(0)
-    expect(body.playerIds).toEqual([0])
+    expect(body.youSeat).toBe(0)
+    expect(body.seats[0]).not.toBeNull()
   })
 
   it("GET /room/:id reflects player 1 after join", async () => {
     const { body } = await req(`/room/${roomId}`, { cookie: c1 })
-    expect(body.playerIds).toEqual([0])
+    expect(body.youSeat).toBe(0)
     expect(body.seats[0]).not.toBeNull()
-    expect(body.playerId).toBe(0)
   })
 
   // -----------------------------------------------------------------------
@@ -120,8 +118,9 @@ describe("Room DO lifecycle", () => {
       body: {},
     })
     expect(res.status).toBe(200)
-    expect(body.playerId).toBe(1)
-    expect(body.playerIds).toEqual([0, 1])
+    expect(body.youSeat).toBe(1)
+    expect(body.seats[0]).not.toBeNull()
+    expect(body.seats[1]).not.toBeNull()
   })
 
   // -----------------------------------------------------------------------
@@ -134,8 +133,9 @@ describe("Room DO lifecycle", () => {
       body: {},
     })
     expect(res.status).toBe(200)
-    expect(body.playerId).toBe(0) // same seat
-    expect(body.playerIds).toEqual([0, 1])
+    expect(body.youSeat).toBe(0) // same seat
+    expect(body.seats[0]).not.toBeNull()
+    expect(body.seats[1]).not.toBeNull()
   })
 
   // -----------------------------------------------------------------------
@@ -152,6 +152,8 @@ describe("Room DO lifecycle", () => {
     expect(body.stage).toBe("in-progress")
     expect(body.turn).toBe(1)
     expect(body.roll).toBeDefined()
+    expect(body).toHaveProperty("activeSeat")
+    expect(body).toHaveProperty("youSeat")
     startRoll = body.roll as string
   })
 
@@ -161,7 +163,9 @@ describe("Room DO lifecycle", () => {
     expect(body.room.activePlayer).toBe(0)
     // Should include scores and winner fields
     expect(body).toHaveProperty("scores")
-    expect(body).toHaveProperty("winner")
+    expect(body).toHaveProperty("winnerSeat")
+    expect(body).toHaveProperty("activeSeat")
+    expect(typeof body.activeSeat).toBe("number")
   })
 
   // -----------------------------------------------------------------------
@@ -189,13 +193,15 @@ describe("Room DO lifecycle", () => {
       cookie: c2,
     })
     expect(res.status).toBe(200)
-    expect(body.playerIds).toEqual([0])
+    expect(body.seats[0]).not.toBeNull()
+    expect(body.seats[1]).toBeNull()
+    expect(body.seats[2]).toBeNull()
+    expect(body.seats[3]).toBeNull()
   })
 
   it("GET /room/:id confirms player 2 left and game is paused", async () => {
     const { body } = await req(`/room/${roomId}`, { cookie: c1 })
     expect(body.seats[1]).toBeNull()
-    expect(body.playerIds).toEqual([0])
     // Game should be paused since player left mid-game
     expect(body.room.stage).toBe("paused")
   })
@@ -322,28 +328,31 @@ describe("M3-9 — Full lifecycle, error handling, 4-player, leave/rejoin", () =
   it("joins 4 players", async () => {
     const r1 = await req(`/room/${roomId4p}/join`, { method: "POST", cookie: c1, body: {} })
     expect(r1.res.status).toBe(200)
-    expect(r1.body.playerId).toBe(0)
+    expect(r1.body.youSeat).toBe(0)
 
     const h2 = await req("/health")
     c2 = h2.cookie
     const r2 = await req(`/room/${roomId4p}/join`, { method: "POST", cookie: c2, body: {} })
     expect(r2.res.status).toBe(200)
-    expect(r2.body.playerId).toBe(1)
+    expect(r2.body.youSeat).toBe(1)
 
     const h3 = await req("/health")
     c3 = h3.cookie
     const r3 = await req(`/room/${roomId4p}/join`, { method: "POST", cookie: c3, body: {} })
     expect(r3.res.status).toBe(200)
-    expect(r3.body.playerId).toBe(2)
+    expect(r3.body.youSeat).toBe(2)
 
     const h4 = await req("/health")
     c4 = h4.cookie
     const r4 = await req(`/room/${roomId4p}/join`, { method: "POST", cookie: c4, body: {} })
     expect(r4.res.status).toBe(200)
-    expect(r4.body.playerId).toBe(3)
+    expect(r4.body.youSeat).toBe(3)
 
     const check = await req(`/room/${roomId4p}`, { cookie: c1 })
-    expect(check.body.playerIds).toEqual([0, 1, 2, 3])
+    expect(check.body.seats[0]).not.toBeNull()
+    expect(check.body.seats[1]).not.toBeNull()
+    expect(check.body.seats[2]).not.toBeNull()
+    expect(check.body.seats[3]).not.toBeNull()
     expect(check.body.seats.filter((s: unknown) => s !== null).length).toBe(4)
   })
 
@@ -358,6 +367,7 @@ describe("M3-9 — Full lifecycle, error handling, 4-player, leave/rejoin", () =
     expect(body.stage).toBe("in-progress")
     expect(body.turn).toBe(1)
     expect(body.roll).toBeDefined()
+    expect(body).toHaveProperty("activeSeat")
     startRoll4p = body.roll as string
   })
 
@@ -387,7 +397,7 @@ describe("M3-9 — Full lifecycle, error handling, 4-player, leave/rejoin", () =
 
   it("rejects placement with out-of-range column", async () => {
     const { body: stateBody } = await req(`/room/${roomId4p}`, { cookie: c2 })
-    const activeRoll = stateBody.room.roll as string
+    const activeRoll = stateBody.roll as string
     const shape = legalShapeForRoll(activeRoll)
     const { res } = await req(`/room/${roomId4p}/turn`, {
       method: "POST",
@@ -399,7 +409,7 @@ describe("M3-9 — Full lifecycle, error handling, 4-player, leave/rejoin", () =
 
   it("rejects placement with shape not matching the roll", async () => {
     const { body: stateBody } = await req(`/room/${roomId4p}`, { cookie: c2 })
-    const currentRoll = stateBody.room.roll as string
+    const currentRoll = stateBody.roll as string
     const opposite: Record<string, string> = {
       I: "O", O: "I", T: "L", L: "T", SZ: "I", any: "Z",
     }
@@ -419,7 +429,7 @@ describe("M3-9 — Full lifecycle, error handling, 4-player, leave/rejoin", () =
     expect(v1).toBeGreaterThan(0)
 
     // Make player 1's move
-    const activeRoll = before.room.roll as string
+    const activeRoll = before.roll as string
     const shape = legalShapeForRoll(activeRoll)
     await req(`/room/${roomId4p}/turn`, {
       method: "POST",
@@ -437,10 +447,13 @@ describe("M3-9 — Full lifecycle, error handling, 4-player, leave/rejoin", () =
       cookie: c4,
     })
     expect(res.status).toBe(200)
-    expect(body.playerIds).toEqual([0, 1, 2])
+    expect(body.seats[0]).not.toBeNull()
+    expect(body.seats[1]).not.toBeNull()
+    expect(body.seats[2]).not.toBeNull()
+    expect(body.seats[3]).toBeNull()
 
     const { body: check } = await req(`/room/${roomId4p}`, { cookie: c1 })
-    expect(check.room.stage).toBe("paused")
+    expect(check.stage).toBe("paused")
     expect(check.seats[3]).toBeNull()
   })
 
@@ -451,8 +464,7 @@ describe("M3-9 — Full lifecycle, error handling, 4-player, leave/rejoin", () =
       body: {},
     })
     expect(res.status).toBe(200)
-    expect(body.playerId).toBe(3)
-    expect(body.playerIds).toEqual([0, 1, 2, 3])
+    expect(body.youSeat).toBe(3)
   })
 
   it("rejects join when all seats are full", async () => {
@@ -464,5 +476,187 @@ describe("M3-9 — Full lifecycle, error handling, 4-player, leave/rejoin", () =
     })
     expect(res.status).toBe(400)
     expect(body.error.code).toBe("ROOM_FULL")
+  })
+})
+
+describe("M4.5-8 — Regression tests for wire format and server behavior changes", () => {
+  // -----------------------------------------------------------------------
+  // a. youSeat correctly assigned per session
+  // -----------------------------------------------------------------------
+  it("youSeat is correctly assigned per session", async () => {
+    const { cookie: c1, body: createRes } = await req("/create-room", { method: "POST" })
+    const roomId = createRes.roomId as string
+
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c1, body: {} })
+    const r1 = await req(`/room/${roomId}`, { cookie: c1 })
+    expect(r1.body.youSeat).toBe(0)
+
+    const { cookie: c2 } = await req("/health")
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c2, body: {} })
+    const r2 = await req(`/room/${roomId}`, { cookie: c2 })
+    expect(r2.body.youSeat).toBe(1)
+
+    // Spectator (no HTTP join) gets youSeat null
+    const { cookie: specCookie } = await req("/health")
+    const spec = await req(`/room/${roomId}`, { cookie: specCookie })
+    expect(spec.body.youSeat).toBeNull()
+  })
+
+  // -----------------------------------------------------------------------
+  // b. Cold-start WS snapshot has non-negative stateVersion
+  // -----------------------------------------------------------------------
+  it("cold-start WS snapshot has stateVersion >= 0", async () => {
+    const { cookie, body: createRes } = await req("/create-room", { method: "POST" })
+    const roomId = createRes.roomId as string
+
+    const wsUrl = BASE.replace(/^http/, "ws")
+    const ws = new WebSocket(`${wsUrl}/ws/room/${roomId}?roomId=${roomId}`, {
+      headers: { Cookie: cookie },
+    } as any)
+
+    const messages: string[] = []
+    const gotState = new Promise<void>((resolve) => {
+      ws.onmessage = (ev) => {
+        messages.push(ev.data as string)
+        if (messages.length >= 2) resolve()
+      }
+      ws.onerror = () => {}
+      setTimeout(() => resolve(), 3000)
+    })
+
+    await gotState
+    ws.close()
+
+    expect(messages.length).toBeGreaterThanOrEqual(2)
+    const stateMsg = JSON.parse(messages[1]!)
+    expect(stateMsg.event).toBe("state")
+    expect(stateMsg.data.stateVersion).toBeGreaterThanOrEqual(0)
+  })
+
+  // -----------------------------------------------------------------------
+  // c. Join response includes updated seats
+  // -----------------------------------------------------------------------
+  it("join response includes full state with updated seats", async () => {
+    const { cookie: c1, body: createRes } = await req("/create-room", { method: "POST" })
+    const roomId = createRes.roomId as string
+
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c1, body: {} })
+
+    const { cookie: c2 } = await req("/health")
+    const { body } = await req(`/room/${roomId}/join`, {
+      method: "POST",
+      cookie: c2,
+      body: {},
+    })
+    expect(body.seats[1]).not.toBeNull()
+    expect(body.youSeat).toBe(1)
+  })
+
+  // -----------------------------------------------------------------------
+  // d. Paused game resumes when all seats are re-filled
+  // -----------------------------------------------------------------------
+  it("paused game resumes when all seats are re-filled", async () => {
+    const { cookie: c1, body: createRes } = await req("/create-room", { method: "POST" })
+    const roomId = createRes.roomId as string
+
+    const { cookie: c2 } = await req("/health")
+
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c1, body: {} })
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c2, body: {} })
+    await req(`/room/${roomId}/start`, { method: "POST", cookie: c1 })
+
+    // Leave pauses the game
+    const { body: leaveRes } = await req(`/room/${roomId}/leave`, {
+      method: "POST",
+      cookie: c2,
+    })
+    expect(leaveRes.stage).toBe("paused")
+
+    const { body: afterLeave } = await req(`/room/${roomId}`, { cookie: c1 })
+    expect(afterLeave.stage).toBe("paused")
+
+    // Rejoin same session → game should resume
+    const { body: rejoinRes } = await req(`/room/${roomId}/join`, {
+      method: "POST",
+      cookie: c2,
+      body: {},
+    })
+    expect(rejoinRes.youSeat).toBe(1)
+
+    const { body: afterRejoin } = await req(`/room/${roomId}`, { cookie: c1 })
+    expect(afterRejoin.stage).toBe("in-progress")
+  })
+
+  // -----------------------------------------------------------------------
+  // e. Zod validation returns structured error
+  // -----------------------------------------------------------------------
+  it("Zod validation returns { error: { code, message } }", async () => {
+    const { cookie: c1, body: createRes } = await req("/create-room", { method: "POST" })
+    const roomId = createRes.roomId as string
+    const { cookie: c2 } = await req("/health")
+
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c1, body: {} })
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c2, body: {} })
+    await req(`/room/${roomId}/start`, { method: "POST", cookie: c1 })
+
+    // Send invalid turn (missing required fields: shape, rotation, flip)
+    const { res, body } = await req(`/room/${roomId}/turn`, {
+      method: "POST",
+      cookie: c1,
+      body: { column: 0 },
+    })
+    expect(res.status).toBe(400)
+    expect(body).toHaveProperty("error")
+    expect(body.error).toHaveProperty("code")
+    expect(body.error).toHaveProperty("message")
+  })
+
+  // -----------------------------------------------------------------------
+  // f. Gap-seat room initializes correctly
+  // -----------------------------------------------------------------------
+  it("gap-seat room (seats 0 and 2) initializes correctly", async () => {
+    const { cookie: c1, body: createRes } = await req("/create-room", { method: "POST" })
+    const roomId = createRes.roomId as string
+
+    const { cookie: c2 } = await req("/health")
+    const { cookie: c3 } = await req("/health")
+
+    // Join three players
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c1, body: {} })  // seat 0
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c2, body: {} })  // seat 1
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c3, body: {} })  // seat 2
+
+    // Player 2 (seat 1) leaves → seats 0 and 2 remain
+    await req(`/room/${roomId}/leave`, { method: "POST", cookie: c2 })
+
+    // Start game with gap seats (0 and 2)
+    const { body: startRes } = await req(`/room/${roomId}/start`, {
+      method: "POST",
+      cookie: c1,
+    })
+    expect(startRes.stage).toBe("in-progress")
+
+    // Both remaining players should have pieces
+    const { body: stateRes } = await req(`/room/${roomId}`, { cookie: c1 })
+    expect(stateRes.piecesRemaining["0"]).toBeDefined()
+    expect(stateRes.piecesRemaining["2"]).toBeDefined()
+  })
+
+  // -----------------------------------------------------------------------
+  // g. winnerSeat is null when game is ongoing
+  // -----------------------------------------------------------------------
+  it("winnerSeat is null when game is ongoing (no winner yet)", async () => {
+    const { cookie: c1, body: createRes } = await req("/create-room", { method: "POST" })
+    const roomId = createRes.roomId as string
+    const { cookie: c2 } = await req("/health")
+
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c1, body: {} })
+    await req(`/room/${roomId}/join`, { method: "POST", cookie: c2, body: {} })
+    await req(`/room/${roomId}/start`, { method: "POST", cookie: c1 })
+
+    const { body } = await req(`/room/${roomId}`, { cookie: c1 })
+    if (body.stage === "in-progress") {
+      expect(body.winnerSeat).toBeNull()
+    }
   })
 })

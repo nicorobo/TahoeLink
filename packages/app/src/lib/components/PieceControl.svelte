@@ -15,12 +15,12 @@
 
   const rotateLeft = () => {
     if (disabled) return
-    pieceState.rotation -= 1
+    pieceState.rotation = ((pieceState.rotation - 1) % 4 + 4) % 4
   }
 
   const rotateRight = () => {
     if (disabled) return
-    pieceState.rotation += 1
+    pieceState.rotation = ((pieceState.rotation + 1) % 4 + 4) % 4
   }
 
   const flip = () => {

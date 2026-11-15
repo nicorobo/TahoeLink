@@ -6,27 +6,32 @@ entries; older detail lives in git and `PLAN.md`, so archive rather than endless
 
 ## Snapshot
 
-- Date: 2026-11-19 (session 14 — post-M4 audit and forward plan; **docs only, no code**)
-- Branch: `orchestrate-M4`
-- M4 (M4-1…M4-12) is marked done in session 13, but **the game is not playable**.
-- Queue: **M4.5 (fix the loop) → M4.6 (verification harness) → M5 (UX/visual) → M6 (deploy)**.
-- Next task: `/task M4.5-2` (stop treating error responses as state), then `M4.5-4`.
+- Date: 2026-11-28 (session 15 — M4.5 P0 hardening complete)
+- Branch: `orchestrate-M4.5`
+- **M4.5 is complete** (8/8 tasks). The game loop is fixed: identity, error handling, snapshot/lobby sync, turn ownership, resume/reconnect, gap-seat keying, personalized mutation responses, and regression tests.
+- Queue: **M4.6 (verification harness) → M5 (UX/visual) → M6 (deploy)**.
+- Next task: `/task M4.6-1` (Playwright + config).
 - Do not start M5 before M4.6 exists.
 
 Use `/verify` before committing and `/handoff` at the end of the session.
 
 ## What changed this session
 
-No code. Added a plan and a verification contract, and recorded what is actually broken.
+All 8 M4.5 P0-hardening tasks were implemented via subagents on the `orchestrate-M4.5` branch.
 
-| File | Change |
+| Task | Key change |
 | --- | --- |
-| `PLAN.md` | New **M4.5** (P0 hardening), new **M4.6** (Playwright harness), rewritten **M5** (UX/visual/playtest); defects D19–D33 with file-level evidence; decisions 36–45; current-state line fixed; next-session queue replaced the stale M0/M1 order |
-| `docs/VERIFICATION.md` | New: harness topology, determinism (dev dice queue), `data-testid` contract, spec→defect map, failure triage, browser-free fallback |
-| `AGENTS.md` | Definition of done requires exercised flows + `test:e2e`; §6 landmines updated to the real M4 state |
-| `.pi/skills/tahoe-verify/SKILL.md` | Green checks no longer imply a working game; E2E marked unavailable until M4.6 |
+| M4.5-1 | 0-based `youSeat`/`activeSeat`/`winnerSeat` on wire; per-socket payload from `broadcastState()`; removed `playerPosition`/`playerId`/`turn-start` |
+| M4.5-2 | `ApiError` + `apiFetch` wrapper; Zod `defaultHook` for `{ error: { code, message } }`; `applyState()` guards undefined; `try/catch` + toasts; `+error.svelte` |
+| M4.5-3 | `await ensureLoaded()`; `lastStateVersion - 1` on connect; `resync` WS message; full state broadcast on join/leave |
+| M4.5-4 | `isMyTurn` derived gate + `pending` guard; `disabled` on Board/PieceControl; normalized rotation in PieceControl and makeMove |
+| M4.5-5 | `disconnectTimestamps` map; 30s grace in `webSocketClose`; resume on reconnect (all disconnected sessions reconnected); alarm cleans stale graces |
+| M4.5-6 | `handleStart` uses `playerIds[i] + 1` instead of `i + 1` for scores/supply keys; winner mapping already correct from M4.5-1 |
+| M4.5-7 | HTTP responses from join/start/turn return `buildStatePayload(sessionId)` instead of `publicRoom()`/sparse objects |
+| M4.5-8 | Existing tests updated for `youSeat`/`seats`/`winnerSeat`; new tests: spectator identity, cold-start WS, join lobby, pause/resume, Zod envelope, gap-seat, winnerSeat |
 
-## Diagnosis (reproduced with a scripted two-client probe against `wrangler dev`)
+## Diagnosis (M4.5 defects — all addressed)<!-- child -->
+
 
 | Observed | Root cause | Task |
 | --- | --- | --- |
@@ -63,6 +68,16 @@ No code. Added a plan and a verification contract, and recorded what is actually
 - API: `cd packages/api && bunx wrangler dev` (port 8787). Web: `cd packages/app && bun run dev`.
 
 ## Session log
+
+### 2026-11-28 (session 15) — M4.5 P0 hardening (8/8 tasks via subagents)
+
+- All 8 M4.5 tasks implemented on `orchestrate-M4.5` branch. Each subagent ran typechecks
+  and engine tests; all clean. API tests need `wrangler dev` at runtime (unchanged).
+- Defects D19–D27 (all P0s from M4.5) are addressed. The game loop is no longer crashing
+  on errors, identity is per-socket not per-broadcast, lobby updates on join/leave,
+  rotation is normalized, turn ownership is enforced, resume works after disconnect,
+  gap-seat rooms can play, and mutations return full state.
+- **Not verified in a browser** — no Playwright installed yet. Next session: M4.6 harness.
 
 ### 2026-11-19 (session 14) — audit + plan
 

@@ -373,7 +373,7 @@ Fix these before spending a minute on visual polish.
 **Goal:** two real browsers complete a game with no console errors, and every rejected
 action leaves the board, score, and turn untouched.
 
-- [ ] **M4.5-1** Fix identity on the wire. Use **0-based seats on the wire**; the engine's
+- [x] **M4.5-1** Fix identity on the wire. Use **0-based seats on the wire**; the engine's
       1-based owner exists only inside `shared` calls. In `shared/src/events.ts`, replace
       `playerId`/`playerPosition` with `youSeat: number | null` in `StatePayload`, expose
       `scores`/`piecesRemaining` keyed by seat, and add `activeSeat`/`winnerSeat` (1-based
@@ -387,7 +387,7 @@ action leaves the board, score, and turn untouched.
       `PlayerSelectionScreen` and `PieceDisplay` to the new field.
       *Acceptance:* a spectator stays `youSeat: null`; two seated clients each see their own
       seat and only their own seat; `playerPosition` no longer exists.
-- [ ] **M4.5-2** Stop treating errors as state. Wrap `app/src/lib/api.ts` in one request
+- [x] **M4.5-2** Stop treating errors as state. Wrap `app/src/lib/api.ts` in one request
       helper that throws `ApiError { code, message }` on `!res.ok` or an `{ error }` body;
       add a `zValidator` `defaultHook` in `api/src/main.ts` so Zod failures return
       `{ error: { code: 'INVALID_REQUEST', message } }` instead of the current
@@ -397,7 +397,7 @@ action leaves the board, score, and turn untouched.
       `src/routes/+error.svelte`; keep the last good board on failure.
       *Acceptance:* a 400/500 produces a toast, stage/board/turn are unchanged, and no
       unhandled rejection reaches the console.
-- [ ] **M4.5-3** Fix snapshot and lobby sync. (a) `handleWebSocketUpgrade` must
+- [x] **M4.5-3** Fix snapshot and lobby sync. (a) `handleWebSocketUpgrade` must
       `await this.ensureLoaded()` before `acceptWebSocket` and before the first snapshot
       (today it is fire-and-forget, so a cold DO sends none). (b) `connected` must not seed
       the stale-version gate in `app/src/lib/events/index.ts` — it makes the first snapshot
@@ -408,7 +408,7 @@ action leaves the board, score, and turn untouched.
       seat cards never change until a reload).
       *Acceptance:* with two browsers, a join updates the first browser's seat cards within
       one second and the first connect to a fresh room receives a snapshot.
-- [ ] **M4.5-4** Enforce turn ownership in the UI. `Board.svelte` is clickable for everyone
+- [x] **M4.5-4** Enforce turn ownership in the UI. `Board.svelte` is clickable for everyone
       and `PieceControl` is shown to every seated player. Derive
       `isMyTurn = youSeat !== null && youSeat === activeSeat && stage === 'in-progress' && !pending`,
       pass `disabled={!isMyTurn}`, and show a non-blocking "Player N's turn" line. Normalize
@@ -418,7 +418,7 @@ action leaves the board, score, and turn untouched.
       two turns.
       *Acceptance:* a non-active player cannot reach `/turn` from the UI; ten rotate-lefts
       still place a piece; two fast clicks produce one move.
-- [ ] **M4.5-5** Resume and reconnect. `handleJoin` allows joining a `paused` room but nothing
+- [x] **M4.5-5** Resume and reconnect. `handleJoin` allows joining a `paused` room but nothing
       ever sets `stage` back to `in-progress`, so a paused game is dead. Resume when every
       previously occupied seat is filled again, keeping `activePlayerId` valid. Also stop
       freeing the seat the instant a socket closes: `webSocketClose` currently pauses the
@@ -426,7 +426,7 @@ action leaves the board, score, and turn untouched.
       that session reconnects.
       *Acceptance:* reload mid-game keeps seat, board, score and turn; a tab closed for
       <30 s does not pause; the game resumes after a rejoin.
-- [ ] **M4.5-6** Key game state by seat, and map the winner back to a seat. `handleStart`
+- [x] **M4.5-6** Key game state by seat, and map the winner back to a seat. `handleStart`
       builds `scores`/`piecesRemaining` from join-order index (`i + 1`) instead of seat
       (`playerIds[i] + 1`), so a room with seats 0 and 2 returns `NO_PIECES` forever.
       `getWinner` returns a 1-based player ID while the UI prints `winner + 1` and colors
@@ -434,13 +434,13 @@ action leaves the board, score, and turn untouched.
       paused seat that seat's pieces and score (record it in the decisions log).
       *Acceptance:* a game with seats 0 and 2 plays; the winner banner and its color match
       the winning seat.
-- [ ] **M4.5-7** Return the actor's personalized snapshot from every mutation
+- [x] **M4.5-7** Return the actor's personalized snapshot from every mutation
       (`buildStatePayload(sessionId)`) instead of `publicRoom()`, so the UI never depends on
       broadcast ordering for scores, pieces, or winner. Delete the unused `turn-start` event
       from `events.ts` (or emit it) so the wire contract has no dead entries.
       *Acceptance:* with the WebSocket disconnected, a legal move still updates score, turn
       and winner on screen.
-- [ ] **M4.5-8** Add API-level regression tests for each fix in
+- [x] **M4.5-8** Add API-level regression tests for each fix in
       `packages/api/src/__tests__/room-do.test.ts`: two clients + spectator WS identity,
       cold-start snapshot, join updates the lobby, start→turn→pause→resume→complete,
       Zod error envelope, non-active move, gap-seat `NO_PIECES` case, winner-to-seat mapping.

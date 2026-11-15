@@ -6,11 +6,11 @@
   const PLAYER_COLORS = ['bg-red-400', 'bg-blue-400', 'bg-amber-400', 'bg-green-400']
 
   /**
-   * Total pieces remaining for a given 1-based player ID.
-   * The DO stores piecesRemaining keyed by 1-based player ID string.
+   * Total pieces remaining for a given seat index (0-based).
+   * piecesRemaining is now keyed by seat index string on the wire.
    */
-  function totalPieces(playerId1Based: number): number {
-    const map = roomState.piecesRemaining[String(playerId1Based)]
+  function totalPieces(seatIndex: number): number {
+    const map = roomState.piecesRemaining[String(seatIndex)]
     if (!map) return 0
     let total = 0
     for (const count of Object.values(map)) {
@@ -39,14 +39,14 @@
       <!-- Active player -->
       <div class="flex flex-col gap-0.5">
         <div class="flex items-center gap-1.5">
-          <span class="inline-block w-3 h-3 rounded-full {PLAYER_COLORS[Math.min(roomState.activePlayer, 3)]}"></span>
+          <span class="inline-block w-3 h-3 rounded-full {PLAYER_COLORS[Math.min(roomState.activeSeat ?? 0, 3)]}"></span>
           <span class="font-semibold text-xs uppercase text-gray-500">Turn</span>
         </div>
-        <span class="font-medium">Player {roomState.activePlayer + 1}</span>
+        <span class="font-medium">Player {(roomState.activeSeat ?? 0) + 1}</span>
       </div>
 
       <!-- "Your turn!" indicator -->
-      {#if roomState.activePlayer === playerState.playerId && roomState.stage === 'in-progress'}
+      {#if roomState.activeSeat === roomState.youSeat && roomState.stage === 'in-progress'}
         <div class="motion-reduce:animate-none animate-pulse text-green-600 font-bold text-xs">
           Your turn!
         </div>
@@ -56,12 +56,12 @@
     <!-- Game over banner -->
     {#if roomState.stage === 'complete'}
       <div class="border-t border-gray-200 pt-1 mt-1">
-        {#if roomState.winner !== null && roomState.winner >= 0}
+        {#if roomState.winnerSeat !== null && roomState.winnerSeat >= 0}
           <span class="font-bold text-sm">
-            <span class="inline-block w-3 h-3 rounded-full {PLAYER_COLORS[Math.min(roomState.winner, 3)]}"></span>
-            Player {roomState.winner + 1} wins!
+            <span class="inline-block w-3 h-3 rounded-full {PLAYER_COLORS[Math.min(roomState.winnerSeat, 3)]}"></span>
+            Player {roomState.winnerSeat + 1} wins!
           </span>
-        {:else if roomState.winner === -1}
+        {:else if roomState.winnerSeat === -1}
           <span class="font-bold text-sm">Tie game!</span>
         {:else}
           <span class="font-bold text-sm">Game over</span>
@@ -74,14 +74,13 @@
       <span class="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Scores</span>
       <div class="flex flex-col gap-0.5 mt-0.5">
         {#each roomState.seats as seat, seatIdx}
-          {@const pid = seatIdx + 1}
-          {@const score = roomState.scores[pid] ?? 0}
+          {@const score = roomState.scores[seatIdx] ?? 0}
           {#if seat !== null}
             <div class="flex items-center gap-2">
               <span class="inline-block w-3 h-3 rounded-full {PLAYER_COLORS[Math.min(seatIdx, 3)]}"></span>
-              <span class="font-medium">P{pid}</span>
+              <span class="font-medium">P{seatIdx + 1}</span>
               <span class="font-mono text-xs">{score} pts</span>
-              <span class="text-[10px] text-gray-400 ml-1">({totalPieces(pid)} left)</span>
+              <span class="text-[10px] text-gray-400 ml-1">({totalPieces(seatIdx)} left)</span>
             </div>
           {/if}
         {/each}

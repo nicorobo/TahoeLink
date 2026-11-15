@@ -164,6 +164,33 @@ export class RoomDurableObject extends DurableObject {
       })
     }
 
+    // Check for stale disconnect graces (>30 seconds) and free those seats
+    const now = Date.now()
+    for (const [sessionId, discTime] of this.disconnectTimestamps) {
+      if (discTime !== null && (now - discTime) > 30_000) {
+        const seatIndex = this.seatBySession(sessionId)
+        if (seatIndex >= 0) {
+          console.log(
+            `Grace expired for session ${sessionId.substring(0, 8)}... at seat ${seatIndex}`,
+          )
+          this._state.seats[seatIndex] = null
+          this.disconnectTimestamps.delete(sessionId)
+
+          if (this._state.activePlayerId === seatIndex) {
+            const occupied = this.occupiedSeats()
+            this._state.activePlayerId = occupied.length > 0 ? occupied[0] : null
+          }
+
+          this._state.stage = 'paused' // keep paused if still in-progress
+          await this.persist()
+          this.broadcastState()
+        } else {
+          // Session not in a seat anymore, just clean up
+          this.disconnectTimestamps.delete(sessionId)
+        }
+      }
+    }
+
     // Check TTL: delete room if idle for too long
     if (Date.now() - this._state.updatedAt > ROOM_TTL_MS) {
       await this.ctx.storage.delete(STATE_KEY)
@@ -185,8 +212,23 @@ export class RoomDurableObject extends DurableObject {
   // WebSocket handlers (Hibernation API)
   // ---------------------------------------------------------------------------
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    // Incoming messages from clients (will handle in M3-5 full turn handling)
-    console.log('WebSocket message received (unhandled):', message)
+    // Parse incoming message
+    const text = typeof message === 'string' ? message : new TextDecoder().decode(message)
+    try {
+      const msg = JSON.parse(text)
+      if (msg.event === 'resync') {
+        await this.ensureLoaded()
+        if (this._state && this._state.initialized) {
+          const tags = ws.deserializeAttachment() as { sessionId: string } | null
+          const sessionId = tags?.sessionId ?? ''
+          this.sendWsMessage(ws, 'state', this.buildStatePayload(sessionId))
+        }
+      } else {
+        console.log('WebSocket message received (unhandled):', text)
+      }
+    } catch (e) {
+      console.log('WebSocket message parse error:', e)
+    }
   }
 
   async webSocketClose(
@@ -208,30 +250,25 @@ export class RoomDurableObject extends DurableObject {
       this.wsConnections.delete(tags.sessionId)
     } else {
       this.wsConnections.set(tags.sessionId, currentCount - 1)
-      // Still have other tabs connected — do not auto-leave
+      // Still have other tabs connected — do nothing
       return
     }
 
-    // This was the last WebSocket for this session — auto-leave if seated
+    // Last WebSocket for this session — record disconnect time (grace period)
     await this.ensureLoaded()
     if (!this._state || !this._state.initialized) return
 
     const seatIndex = this.seatBySession(tags.sessionId)
-    if (seatIndex < 0) return
+    if (seatIndex < 0) return  // Not a player (spectator)
 
+    // Record disconnect time but DON'T free the seat
+    this.disconnectTimestamps.set(tags.sessionId, Date.now())
+
+    // If game is in progress, pause it
     if (this._state.stage === 'in-progress') {
-      // Auto-leave and pause
-      this._state.seats[seatIndex] = null
       this._state.stage = 'paused'
-
-      if (this._state.activePlayerId === seatIndex) {
-        const occupied = this.occupiedSeats()
-        this._state.activePlayerId = occupied.length > 0 ? occupied[0] : null
-      }
-
       await this.persist()
-      this.broadcast({ event: 'player-left', data: { playerIds: this.occupiedSeats() } })
-      this.broadcast({ event: 'state', data: this.buildStatePayload('') })
+      this.broadcastState()
     }
   }
 
@@ -273,6 +310,9 @@ export class RoomDurableObject extends DurableObject {
 
   /** Track WebSocket connection count per session for multi-tab support. */
   private wsConnections: Map<string, number> = new Map()
+
+  /** Tracks when each session disconnected (in-memory only). null = connected. */
+  private disconnectTimestamps: Map<string, number | null> = new Map()
 
   /** Non-empty seat indices → player IDs. */
   private occupiedSeats(): number[] {
@@ -321,23 +361,8 @@ export class RoomDurableObject extends DurableObject {
 
   private async handleGetRoom(request: Request): Promise<Response> {
     const sessionId = request.headers.get('X-Session-Id') ?? ''
-    const state = this._state!
-    const playerIds = this.occupiedSeats()
-    const playerPosition = this.seatBySession(sessionId)
-    const playerId = playerPosition >= 0 ? playerPosition : null
-
     return new Response(
-      JSON.stringify({
-        room: this.publicRoom(),
-        playerIds,
-        playerPosition,
-        playerId,
-        seats: state.seats,
-        scores: state.scores,
-        winner: state.winner,
-        piecesRemaining: state.piecesRemaining,
-        stateVersion: state.stateVersion,
-      }),
+      JSON.stringify(this.buildStatePayload(sessionId)),
       { headers: { 'Content-Type': 'application/json' } },
     )
   }
@@ -380,7 +405,7 @@ export class RoomDurableObject extends DurableObject {
     const existingSeat = this.seatBySession(sessionId)
     if (existingSeat >= 0) {
       return new Response(
-        JSON.stringify({ playerId: existingSeat, playerIds: this.occupiedSeats() }),
+        JSON.stringify(this.buildStatePayload(sessionId)),
         { headers: { 'Content-Type': 'application/json' } },
       )
     }
@@ -393,10 +418,29 @@ export class RoomDurableObject extends DurableObject {
     state.seats[emptySeat] = sessionId
     await this.persist()
 
+    // If game was paused, check if all seats are now reconnected and resume
+    if (state.stage === 'paused') {
+      let allConnected = true
+      for (let i = 0; i < state.seats.length; i++) {
+        if (state.seats[i] === null) continue
+        const sessId = state.seats[i]
+        const discTime = this.disconnectTimestamps.get(sessId)
+        if (discTime !== null && discTime !== undefined) {
+          allConnected = false
+          break
+        }
+      }
+      if (allConnected && this.occupiedSeats().length >= 2) {
+        state.stage = 'in-progress'
+        await this.persist()
+      }
+    }
+
     this.broadcast({ event: 'player-joined', data: { playerIds: this.occupiedSeats() } })
+    this.broadcastState()
 
     return new Response(
-      JSON.stringify({ playerId: emptySeat, playerIds: this.occupiedSeats() }),
+      JSON.stringify(this.buildStatePayload(sessionId)),
       { headers: { 'Content-Type': 'application/json' } },
     )
   }
@@ -416,6 +460,7 @@ export class RoomDurableObject extends DurableObject {
 
     // Free the seat
     state.seats[seatIndex] = null
+    this.disconnectTimestamps.delete(sessionId)
 
     // If game is in progress, pause it
     if (state.stage === 'in-progress') {
@@ -431,7 +476,7 @@ export class RoomDurableObject extends DurableObject {
     await this.persist()
 
     this.broadcast({ event: 'player-left', data: { playerIds: this.occupiedSeats() } })
-    this.broadcast({ event: 'state', data: this.buildStatePayload('') })
+    this.broadcastState()
 
     return new Response(
       JSON.stringify({ playerIds: this.occupiedSeats() }),
@@ -469,7 +514,8 @@ export class RoomDurableObject extends DurableObject {
     // We map seat 0 → player 1, seat 1 → player 2, etc.
     const remapped: Record<string, Record<string, number>> = {}
     for (let i = 0; i < playerIds.length; i++) {
-      const pid = String(i + 1)
+      const seat = playerIds[i]
+      const pid = String(seat + 1)
       remapped[pid] = supply[Number(pid)] ?? { L: 5, O: 5, T: 5, I: 5, S: 5, Z: 5 }
     }
     state.piecesRemaining = remapped
@@ -478,7 +524,7 @@ export class RoomDurableObject extends DurableObject {
     const initialScores: Record<number, number> = {}
     const initialScoredCells: Record<string, string[]> = {}
     for (let i = 0; i < playerIds.length; i++) {
-      const pid = i + 1
+      const pid = playerIds[i] + 1
       initialScores[pid] = 0
       initialScoredCells[String(pid)] = []
     }
@@ -499,10 +545,9 @@ export class RoomDurableObject extends DurableObject {
 
     await this.persist()
 
-    const roomData = this.publicRoom()
-    this.broadcast({ event: 'state', data: this.buildStatePayload(sessionId) })
+    this.broadcastState()
 
-    return new Response(JSON.stringify(roomData), {
+    return new Response(JSON.stringify(this.buildStatePayload(sessionId)), {
       headers: { 'Content-Type': 'application/json' },
     })
   }
@@ -598,13 +643,13 @@ export class RoomDurableObject extends DurableObject {
       }
 
       await this.persist()
-      this.broadcast({ event: 'state', data: this.buildStatePayload(sessionId) })
+      this.broadcastState()
       this.broadcast({
         event: 'game-over',
         data: { winner: state.winner, scores: { ...state.scores } },
       })
 
-      return new Response(JSON.stringify(this.publicRoom()), {
+      return new Response(JSON.stringify(this.buildStatePayload(sessionId)), {
         headers: { 'Content-Type': 'application/json' },
       })
     }
@@ -658,7 +703,7 @@ export class RoomDurableObject extends DurableObject {
 
     await this.persist()
 
-    this.broadcast({ event: 'state', data: this.buildStatePayload(sessionId) })
+    this.broadcastState()
     if (state.stage === 'complete') {
       this.broadcast({
         event: 'game-over',
@@ -666,7 +711,7 @@ export class RoomDurableObject extends DurableObject {
       })
     }
 
-    return new Response(JSON.stringify(this.publicRoom()), {
+    return new Response(JSON.stringify(this.buildStatePayload(sessionId)), {
       headers: { 'Content-Type': 'application/json' },
     })
   }
@@ -675,12 +720,11 @@ export class RoomDurableObject extends DurableObject {
   // WebSocket upgrade
   // ---------------------------------------------------------------------------
 
-  private handleWebSocketUpgrade(request: Request): Response {
+  private async handleWebSocketUpgrade(request: Request): Promise<Response> {
     const url = new URL(request.url)
     const sessionId = url.searchParams.get('sessionId') ?? ''
 
-    // Fire-and-forget load so state is warm for the state snapshot
-    this.ensureLoaded()
+    await this.ensureLoaded()
 
     const pair = new WebSocketPair()
     const [client, server] = [pair[0], pair[1]]
@@ -691,6 +735,29 @@ export class RoomDurableObject extends DurableObject {
     // Track this connection for multi-tab support
     const currentCount = this.wsConnections.get(sessionId) ?? 0
     this.wsConnections.set(sessionId, currentCount + 1)
+
+    // Cancel disconnect grace for this session (if reconnecting)
+    this.disconnectTimestamps.set(sessionId, null)
+
+    // If game was paused and all previously occupied seats now have active WS
+    // connections, resume
+    if (this._state && this._state.stage === 'paused') {
+      let allConnected = true
+      for (let i = 0; i < this._state.seats.length; i++) {
+        if (this._state.seats[i] === null) continue // empty seat
+        const sessId = this._state.seats[i]
+        const discTime = this.disconnectTimestamps.get(sessId)
+        if (discTime !== null && discTime !== undefined) {
+          allConnected = false
+          break
+        }
+      }
+      if (allConnected && this.occupiedSeats().length >= 2) {
+        this._state.stage = 'in-progress'
+        await this.persist()
+        this.broadcastState()
+      }
+    }
 
     // Send initial connection event with current state version
     const version = this._state?.stateVersion ?? 0
@@ -719,25 +786,47 @@ export class RoomDurableObject extends DurableObject {
     }
   }
 
-  /** Build the full state payload for a connecting client. */
+  /** Build the full state payload for a specific session. */
   private buildStatePayload(sessionId: string) {
     if (!this._state) return {}
-    const playerIds = this.occupiedSeats()
-    const playerPosition = this.seatBySession(sessionId)
+    const youSeat = this.seatBySession(sessionId)
+    // Map 1-based engine scores/piecesRemaining to 0-based seat keys for the wire
+    const seatScores: Record<number, number> = {}
+    const seatPieces: Record<string, Record<string, number>> = {}
+    for (let seat = 0; seat < 4; seat++) {
+      const pid = seat + 1
+      const pidStr = String(pid)
+      seatScores[seat] = this._state.scores[pid] ?? 0
+      seatPieces[String(seat)] = this._state.piecesRemaining[pidStr] ?? { L: 0, O: 0, T: 0, I: 0, S: 0, Z: 0 }
+    }
     return {
       board: this._state.board,
       seats: this._state.seats,
-      activePlayer: this._state.activePlayerId,
+      youSeat: youSeat >= 0 ? youSeat : null,
+      activeSeat: this._state.activePlayerId,
       turn: this._state.turn,
       roll: this._state.roll,
       stage: this._state.stage,
-      scores: { ...this._state.scores },
-      winner: this._state.winner,
-      piecesRemaining: { ...this._state.piecesRemaining },
+      scores: seatScores,
+      winnerSeat: this._state.winner !== null && this._state.winner >= 0 ? this._state.winner - 1 : (this._state.winner === -1 ? -1 : null),
+      piecesRemaining: seatPieces,
       stateVersion: this._state.stateVersion,
-      playerIds,
-      playerPosition,
-      playerId: playerPosition >= 0 ? playerPosition : null,
+    }
+  }
+
+  /** Broadcast a per-socket state payload to all connected clients. */
+  private broadcastState(): void {
+    const sockets = this.ctx.getWebSockets()
+    for (const ws of sockets) {
+      const tags = ws.deserializeAttachment() as { sessionId: string } | null
+      const sessionId = tags?.sessionId ?? ''
+      const payload = this.buildStatePayload(sessionId)
+      const msg = JSON.stringify({ event: 'state', data: payload })
+      try {
+        ws.send(msg)
+      } catch {
+        // Client disconnected — will be cleaned up on next close event
+      }
     }
   }
 }
