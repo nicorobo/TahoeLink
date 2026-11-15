@@ -13,6 +13,7 @@ export type StatePayload = Room & {
     playerId: number | null
     scores: Record<number, number>
     winner: number | null
+    piecesRemaining: Record<string, Record<string, number>>
     stateVersion: number
 }
 

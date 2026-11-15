@@ -14,7 +14,7 @@
     <div>
       {#each shape[i] as cell}
         <div
-          class={`${cell > 0 && getCellBackgroundClass(playerId)} h-10 w-10`}>
+          class={`${cell > 0 && getCellBackgroundClass(playerId)} h-10 w-10 max-sm:h-8 max-sm:w-8`}>
         </div>
       {/each}
     </div>

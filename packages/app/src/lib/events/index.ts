@@ -1,4 +1,5 @@
 import { playerState, roomState } from "$lib/state.svelte"
+import { addToast } from "$lib/toast.svelte"
 import type { EventPayloadMap, EventName } from "@tahoelink/shared"
 
 type Handler<E extends EventName> = (payload: EventPayloadMap[E]) => void
@@ -38,13 +39,19 @@ export const eventHandlers: { [K in EventName]: Handler<K> } = {
         roomState.board = data.board
         roomState.stage = data.stage
         roomState.activePlayer = data.activePlayer
+        roomState.seats = data.seats
+        roomState.scores = data.scores
+        roomState.winner = data.winner ?? null
+        roomState.piecesRemaining = data.piecesRemaining
         if (data.playerPosition >= 0) {
             playerState.playerId = data.playerPosition
         }
         playerState.playerIds = data.playerIds
-    },
+    }, 
     'game-over': (data) => {
         roomState.stage = 'complete'
+        roomState.winner = data.winner ?? null
+        roomState.scores = data.scores
         console.log('Game over! Winner:', data.winner)
     },
     'heartbeat': (data) => {
@@ -56,5 +63,6 @@ export const eventHandlers: { [K in EventName]: Handler<K> } = {
     },
     'error': (data) => {
         console.error('Server error:', data.message)
+        addToast(data.message, 'error')
     },
 }

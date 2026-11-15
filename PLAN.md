@@ -318,29 +318,29 @@ DO storage inspection via `wrangler tail` or admin endpoint.
 
 Screens/components:
 
-- [ ] **M4-1** App shell: room header with room code, copy-invite-link button, connection
+- [x] **M4-1** App shell: room header with room code, copy-invite-link button, connection
       status, and a link back home.
-- [ ] **M4-2** Lobby: seat cards with colors, occupied/empty state, join/leave, spectator
+- [x] **M4-2** Lobby: seat cards with colors, occupied/empty state, join/leave, spectator
       count, "Start game" for the host (enabled at `MIN_PLAYERS`), and rules link.
-- [ ] **M4-3** Compose the game screen from the existing `Board`, `PieceDisplay`, and
+- [x] **M4-3** Compose the game screen from the existing `Board`, `PieceDisplay`, and
       `PieceControl` components (currently unused). Remove or integrate `PlayerStatus` and
       `JoinButtons`.
-- [ ] **M4-4** Placement preview: ghost piece in the hovered/focused column; highlight
+- [x] **M4-4** Placement preview: ghost piece in the hovered/focused column; highlight
       illegal columns; clicking anywhere in a column places there. Use `getLegalColumns`
       from `shared`.
-- [ ] **M4-5** Controls: rotate left/right (fix the both-increment bug), flip, keyboard
+- [x] **M4-5** Controls: rotate left/right (fix the both-increment bug), flip, keyboard
       bindings, and only the rolled shape (or `any`) selectable.
-- [ ] **M4-6** Status panels: active player, "your turn", die result (large), per-player
+- [x] **M4-6** Status panels: active player, "your turn", die result (large), per-player
       scores, pieces remaining, and a color legend.
-- [ ] **M4-7** Paused overlay when a player leaves mid-game; winner/complete screen with
+- [x] **M4-7** Paused overlay when a player leaves mid-game; winner/complete screen with
       final scores and a rematch button.
-- [ ] **M4-8** Error toasts, loading states, reconnect banner, and optimistic-disable while a
+- [x] **M4-8** Error toasts, loading states, reconnect banner, and optimistic-disable while a
       move is in flight (no double submit).
-- [ ] **M4-9** Responsive layout: board scales from 360 px, controls stack, touch targets.
-- [ ] **M4-10** Accessibility: `aria-label`/`aria-live` for the board and turn/score changes,
+- [x] **M4-9** Responsive layout: board scales from 360 px, controls stack, touch targets.
+- [x] **M4-10** Accessibility: `aria-label`/`aria-live` for the board and turn/score changes,
       focus rings, reduced motion, colorblind-safe owner indicators.
-- [ ] **M4-11** Spectator mode: watch without a seat, see the same board and status.
-- [ ] **M4-12** Empty/edge states: unknown room, room full, game already started, room
+- [x] **M4-11** Spectator mode: watch without a seat, see the same board and status.
+- [x] **M4-12** Empty/edge states: unknown room, room full, game already started, room
       expired.
 
 **Acceptance:** the Definition of "playable" UI checklist passes on desktop and a 390 px
@@ -405,7 +405,7 @@ backlog.
 | D10 | P1 | Unknown rooms return default; no TTL; weak IDs | M3-2 |
 | D11 | P1 | No WebSocket snapshot/heartbeat/resync | M3-7 |
 | D12 | P1 | Broadcast only reaches one process; fire-and-forget | — (resolved by DO in M2) |
-| D13 | P1 | Start button not wired; rotation bug; shape not locked | M4-2, M4-5 |
+| D13 | P1 | Start button not wired (DONE M4-2); rotation bug; shape not locked | M4-2 ✅, M4-5 ✅ |
 | D14 | P1 | Typecheck fails on shared type-only imports | M0-5 ✅ |
 | D15 | P1 | `REDIS_URL` ignored | — (deleted; Redis removed in M2) |
 | D16 | P1 | No tests/CI | M0-8 ✅, M1-9 |
@@ -488,6 +488,14 @@ than silently choosing.
 | 24 | Player ID convention for scores | 1-based (engine convention: seatIndex + 1) vs 0-based (seat index as-is) | **1-based scores in DO state** | Engine functions (`createPieceSupply`, `scoreTurn`, etc.) use 1-based player IDs; DO stores scores with 1-based keys and maps seatIndex → owner via +1/-1 at the engine boundary | 2026-11-16 |
 | 26 | Heartbeat mechanism | Separate heartbeat alarm vs combined TTL + heartbeat single alarm | **Single alarm for both** | DO only has one `setAlarm`; the alarm handler sends heartbeat (~20s) then checks TTL (24h) and reschedules. Idle rooms without WS connections use TTL interval to avoid waking up. | 2026-11-16 |
 | 27 | Multi-tab WebSocket tracking | Persisted vs in-memory connection counter | **In-memory `Map<string, number>`** | WebSocket connections are inherently ephemeral; on DO restart all connections are lost. No need to persist connection counts. | 2026-11-16 |
+| 28 | Connection status state | Shared `$state` vs local `$state` in page | **Local `$state` in `+page.svelte`** | Imports are read-only bindings; local `$state` avoids reassignment errors and keeps the concern scoped to the room page | 2026-11-16 |
+| 29 | Lobby seat display | No player names exist yet; seats hold session UUIDs | **Show "Occupied"/"Empty"** | Session UUIDs are not user-friendly; real player names deferred until a naming system is added. Seat color from `getCellBackgroundClass(seatIndex)` signals identity. | 2026-11-16 |
+| 30 | Game screen composition | PlayerStatus+JoinButtons vs inline player info vs import PlayerStatus | **Inline player info; drop PlayerStatus/JoinButtons** | PlayerStatus depends on JoinButtons (legacy SSE join UI); lobby join is already handled by PlayerSelectionScreen. Game screen shows "You are Player X" + Leave button inline. Removed dead `onJoin` function. Changed `makeMove(cell)` → `makeMove(column)` since Board passes column index directly. | 2026-11-16 |
+| 31 | PieceControl `legalShapes` prop | Compute inside PieceControl vs accept from parent | **Accept from parent as a prop** | Keeps PieceControl decoupled from global roomState; parent computes via `legalShapesForDie(roomState.roll)` and passes the result. Consistent with the parent-driven `currentShape`/`legalCols` pattern in `+page.svelte`. | 2026-11-16 |
+| 32 | Keyboard handler placement | PieceControl container vs +page.svelte | **PieceControl container with `onkeydown`** | Co-locates keyboard + button controls in one component; page-level handler would need to reach into PieceControl's logic. Container uses `tabindex="-1"` + `role="region"` for focusability. | 2026-11-16 |
+| 33 | Board responsive scaling | `max-sm:w-8 max-sm:h-8` vs `overflow-auto` scrollable container vs CSS `scale()` transform | **Both: `max-w-full overflow-auto` container + `max-sm:w-8 max-sm:h-8` cells** | Two-layer approach: outer container prevents horizontal overflow on any screen; smaller cells (32px → 320px board) on sub-640px viewports ensure fit in 360px. `overflow-auto` handles edge cases where content still exceeds viewport. | 2026-11-18 |
+| 34 | Colorblind indicator in cells | Small number text vs icon/symbol vs pattern overlay | **Small owner number (`<span class="text-[10px] text-black/60">`)** | Cells are 40×40px (32px on mobile), too small for patterns or initials. A translucent number overlays the colored background without obscuring it, readable against all 4 player colors. | 2026-11-18 |
+| 35 | Reduced-motion strategy | CSS `@media (prefers-reduced-motion)` vs Tailwind `motion-reduce:` prefix | **Tailwind `motion-reduce:` prefix** | Tailwind v4 natively supports `motion-reduce:` variant prefix that applies classes only when the user's OS accessibility setting requests reduced motion. Cleaner than manual media queries. | 2026-11-18 |
 
 ---
 
